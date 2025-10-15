@@ -1,5 +1,5 @@
 __pycache__/
-.DS_Store/
+.DS_Store
 .cache/
 .vscode/
 build/
@@ -21,3 +21,4 @@ build/
 /stdout.txt
 /gmon.out
 /*.exe
+prboom-go/components/.DS_Store

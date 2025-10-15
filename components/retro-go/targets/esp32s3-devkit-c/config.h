@@ -3,15 +3,15 @@
 
 // Storage
 #define RG_STORAGE_ROOT             "/sd"
-#define RG_STORAGE_SDSPI_HOST       SPI3_HOST
-#define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
-// #define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
-// #define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
+// #define RG_STORAGE_SDSPI_HOST       SPI3_HOST
+// #define RG_STORAGE_SDSPI_SPEED      1000 //SDMMC_FREQ_DEFAULT
+#define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
+#define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_FLASH_PARTITION  "vfs"
 
 // Audio
 #define RG_AUDIO_USE_INT_DAC        0   // 0 = Disable, 1 = GPIO25, 2 = GPIO26, 3 = Both
-#define RG_AUDIO_USE_EXT_DAC        1   // 0 = Disable, 1 = Enable
+#define RG_AUDIO_USE_EXT_DAC        0   // 0 = Disable, 1 = Enable
 
 // Video
 #define RG_SCREEN_DRIVER            0   // 0 = ILI9341/ST7789
@@ -46,22 +46,27 @@
 
 // Input
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
+
+// # ADC_1_5 = GPIO6
+// # ADC_1_6 = GPIO7
+
 #define RG_GAMEPAD_ADC_MAP {\
     {RG_KEY_UP,    ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 3072, 4096},\
-    {RG_KEY_RIGHT, ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 1024, 3071},\
-    {RG_KEY_DOWN,  ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 1024, 3071},\
+    {RG_KEY_RIGHT, ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 0, 1024},\
+    {RG_KEY_DOWN,  ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 0, 1024},\
     {RG_KEY_LEFT,  ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 3072, 4096},\
 }
 #define RG_GAMEPAD_GPIO_MAP {\
-    {RG_KEY_SELECT, .num = GPIO_NUM_16, .pullup = 1, .level = 0},\
-    {RG_KEY_START,  .num = GPIO_NUM_17, .pullup = 1, .level = 0},\
-    {RG_KEY_MENU,   .num = GPIO_NUM_18, .pullup = 1, .level = 0},\
-    {RG_KEY_OPTION, .num = GPIO_NUM_8,  .pullup = 1, .level = 0},\
-    {RG_KEY_A,      .num = GPIO_NUM_15, .pullup = 1, .level = 0},\
-    {RG_KEY_B,      .num = GPIO_NUM_5,  .pullup = 1, .level = 0},\
+    {RG_KEY_SELECT, .num = GPIO_NUM_38, .pullup = 1, .level = 0},\
+    {RG_KEY_START,  .num = GPIO_NUM_39, .pullup = 1, .level = 0},\
+    {RG_KEY_MENU,   .num = GPIO_NUM_40, .pullup = 1, .level = 0},\
+    {RG_KEY_OPTION, .num = GPIO_NUM_41, .pullup = 1, .level = 0},\
+    {RG_KEY_A,      .num = GPIO_NUM_42, .pullup = 1, .level = 0},\
+    {RG_KEY_B,      .num = GPIO_NUM_2,  .pullup = 1, .level = 0},\
 }
 
 // Battery
+// # ADC_1_3 = GPIO4
 #define RG_BATTERY_DRIVER           1
 #define RG_BATTERY_ADC_UNIT         ADC_UNIT_1
 #define RG_BATTERY_ADC_CHANNEL      ADC_CHANNEL_3
@@ -70,24 +75,31 @@
 
 
 // Status LED
-#define RG_GPIO_LED                 GPIO_NUM_38
+#define RG_GPIO_LED                 GPIO_NUM_48
 
 // SPI Display (back up working)
-#define RG_GPIO_LCD_MISO            GPIO_NUM_NC
-#define RG_GPIO_LCD_MOSI            GPIO_NUM_12
-#define RG_GPIO_LCD_CLK             GPIO_NUM_48
-#define RG_GPIO_LCD_CS              GPIO_NUM_NC
-#define RG_GPIO_LCD_DC              GPIO_NUM_47
-#define RG_GPIO_LCD_BCKL            GPIO_NUM_39
-#define RG_GPIO_LCD_RST             GPIO_NUM_3
+#define RG_GPIO_LCD_MISO            GPIO_NUM_17
+#define RG_GPIO_LCD_MOSI            GPIO_NUM_18
+#define RG_GPIO_LCD_CLK             GPIO_NUM_16
+#define RG_GPIO_LCD_CS              GPIO_NUM_8
+#define RG_GPIO_LCD_DC              GPIO_NUM_15
+#define RG_GPIO_LCD_BCKL            GPIO_NUM_NC
+#define RG_GPIO_LCD_RST             GPIO_NUM_9
 
-#define RG_GPIO_SDSPI_MISO          GPIO_NUM_9
-#define RG_GPIO_SDSPI_MOSI          GPIO_NUM_11
-#define RG_GPIO_SDSPI_CLK           GPIO_NUM_13
+// #define RG_GPIO_SDSPI_MISO          GPIO_NUM_13
+// #define RG_GPIO_SDSPI_MOSI          GPIO_NUM_11
+// #define RG_GPIO_SDSPI_CLK           GPIO_NUM_12
+// #define RG_GPIO_SDSPI_CS            GPIO_NUM_10
+
+
+#define RG_GPIO_SDSPI_CLK           GPIO_NUM_12
+#define RG_GPIO_SDSPI_CMD           GPIO_NUM_11
+#define RG_GPIO_SDSPI_D0            GPIO_NUM_13
 #define RG_GPIO_SDSPI_CS            GPIO_NUM_10
 
-// External I2S DAC
-#define RG_GPIO_SND_I2S_BCK         41
-#define RG_GPIO_SND_I2S_WS          42
-#define RG_GPIO_SND_I2S_DATA        40
-// #define RG_GPIO_SND_AMP_ENABLE      18
+
+// // External I2S DAC
+// #define RG_GPIO_SND_I2S_BCK         41
+// #define RG_GPIO_SND_I2S_WS          42
+// #define RG_GPIO_SND_I2S_DATA        40
+// // #define RG_GPIO_SND_AMP_ENABLE      18

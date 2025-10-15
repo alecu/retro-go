@@ -41,8 +41,10 @@
 #include <midifile.h>
 #include <oplplayer.h>
 #include <rg_system.h>
+#include <math.h>
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
+#include "main.h"
 #endif
 
 #define AUDIO_SAMPLE_RATE 22050
@@ -54,6 +56,11 @@ static rg_surface_t *update;
 static rg_app_t *app;
 
 static const char *doom_argv[10];
+
+// // ventilastation buffers
+static uint8_t *vs_data = NULL;
+static uint32_t *vs_palette = NULL;
+static uint16_t *vs_projection_table = NULL;
 
 // Expected variables by doom
 int snd_card = 1, mus_card = 1;
@@ -139,8 +146,89 @@ void I_UpdateNoBlit(void)
 
 void I_FinishUpdate(void)
 {
+    static int framecount = 0;
+    framecount++;
+    // está por acá la cosa...
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
+    memcpy(vs_data, update->data, SCREENWIDTH * SCREENHEIGHT);
+    if (framecount == 60)
+    {
+        framecount = 0;
+        //dump_vs_data(dumpbuf);
+        dump_vs_projected();
+    }
+}
+
+
+
+
+void dump_vs_projected()
+{ 
+    char dumpbuf[73];
+    RG_LOGI("Dumping Ventilastation Projected Data:\n");
+
+    for (int angle = 0; angle < 256; angle++)
+    {
+        uint32_t row[54];
+        project_angle(angle, row);
+
+        for (int n = 0; n < 54; n++)
+        {
+            int v = (n % 9) * 8;
+            sprintf(&dumpbuf[v], "%08lX ", row[n]);
+            if (v == 64)
+            {
+                dumpbuf[72] = '\0';
+                RG_LOGI("%s", dumpbuf);
+            }
+        }
+    }
+
+}
+
+void project_angle(int angle, uint32_t row[54])
+{
+    for (int led = 0; led < 54; led++)
+    {
+        uint16_t pos = vs_projection_table[angle * 54 + led];
+        int x = ((pos >> 8) & 0xFF) - 128 + SCREENWIDTH / 2;
+        int y = (pos & 0xFF) - 128 + SCREENHEIGHT / 2;
+        uint8_t px = vs_data[y * SCREENWIDTH + x];
+        uint32_t color = vs_palette[px];
+        row[led] = color;
+    }
+}
+
+void dump_vs_data(char dumpbuf[81])
+{
+    RG_LOGI("Dumping Ventilastation Screen Data...");
+    for (int h = 0; h < SCREENHEIGHT; h++)
+    {
+        for (int w = 0; w < SCREENWIDTH; w++)
+        {
+            int v = (w % 40) * 2;
+            sprintf(&dumpbuf[v], "%02X ", vs_data[h * SCREENWIDTH + w]);
+            if (v == 78)
+            {
+                dumpbuf[80] = '\0';
+                RG_LOGI("%s", dumpbuf);
+            }
+            // int color = ((uint16_t *)vs_data)[h * SCREENWIDTH + w];
+            // vs_palette[color & 0xFF] = ((color & 0xF800) << 8) | ((color & 0x07E0) << 5) | ((color & 0x001F) << 3);
+        }
+    }
+    RG_LOGI("Dumping Ventilastation Palette:\n");
+    for (int i = 0; i < 256; i++)
+    {
+        int v = (i % 8) * 8;
+        sprintf(&dumpbuf[v], "%08lX ", vs_palette[i]);
+        if (v == 56)
+        {
+            dumpbuf[64] = '\0';
+            RG_LOGI("%s", dumpbuf);
+        }
+    }
 }
 
 bool I_StartDisplay(void)
@@ -160,6 +248,10 @@ void I_SetPalette(int pal)
         update->palette[i] = palette[i] << 8 | palette[i] >> 8;
     Z_Free(palette);
     current_palette = pal;
+
+    uint32_t *pal32 = V_BuildPalette(pal, 32);
+    memcpy(vs_palette, pal32, 256 * 4);
+    Z_Free(pal32);
 }
 
 void I_InitGraphics(void)
@@ -213,6 +305,8 @@ void I_UpdateSoundParams(int handle, int volume, int seperation, int pitch)
 
 int I_StartSound(int sfxid, int channel, int vol, int sep, int pitch, int priority)
 {
+
+    // TODO: esto hay que reemplazarlo por algo que envie los ids de sonidos a la base
     int oldest = gametic;
     int slot = 0;
 
@@ -256,6 +350,7 @@ int I_StartSound(int sfxid, int channel, int vol, int sep, int pitch, int priori
 
 void I_StopSound(int handle)
 {
+    // TODO: hay que permitir apagar un sonido
     if (handle < NUM_MIX_CHANNELS)
         channels[handle].sfx = NULL;
 }
@@ -549,6 +644,8 @@ void app_main()
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
 
+    ventilastation_init();
+
     const char *iwad = NULL;
     const char *pwad = NULL;
 
@@ -583,4 +680,58 @@ void app_main()
 
     Z_Init();
     D_DoomMain();
+}
+
+void ventilastation_init()
+{
+    // Initialize ventilastation
+    vs_data = rg_alloc(SCREENWIDTH * SCREENHEIGHT, MEM_FAST);
+    vs_palette = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
+    vs_projection_table = rg_alloc(256 * 54 * sizeof(uint16_t), MEM_FAST);
+
+    memset(vs_data, 0, SCREENWIDTH * SCREENHEIGHT);
+    memset(vs_palette, 0, 256 * sizeof(uint32_t));
+    memset(vs_projection_table, 0, 256 * 54 * sizeof(uint16_t));
+
+    vs_setup_projection_table();
+}
+
+void dump_vs_projection_table()
+{
+    char dumpbuf[65];
+    RG_LOGI("Dumping Ventilastation Projection Map:\n");
+    for (int n = 0; n < 54; n++)
+    {
+        for (int m = 0; m < 256; m++)
+        {
+            int v = (m % 16) * 4;
+            sprintf(&dumpbuf[v], "%04X ", vs_projection_table[n * 256 + m]);
+            if (v == 60)
+            {
+                dumpbuf[64] = '\0';
+                RG_LOGI("%s", dumpbuf);
+            }
+        }
+        RG_LOGI("\n");
+    }
+}
+
+void vs_setup_projection_table()
+{
+    int n_led = 54;
+    int n_ang = 256;
+    int center_x = SCREENWIDTH / 2;
+    int center_y = SCREENHEIGHT / 2;
+    int radius = RG_MIN(center_x, center_y) - 2;
+
+    for (int m = 0; m < n_ang; m++)
+    {
+        for (int n = 0; n < n_led; n++)
+        {
+            int x = 128 + (int)(radius * (n+1) / n_led * cos(m * 2* M_PI/n_ang));
+            int y = 128 + (int)(radius * (n+1) / n_led * sin(m * 2* M_PI/n_ang));
+            vs_projection_table[m * n_led + n] = (x << 8) + y;
+        }
+    }
+    dump_vs_projection_table();
 }
