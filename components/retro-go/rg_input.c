@@ -8,6 +8,7 @@
 #ifdef ESP_PLATFORM
 #include <driver/gpio.h>
 #include <driver/adc.h>
+#include "driver/uart.h"
 // This is a lazy way to silence deprecation notices on some esp-idf versions...
 // This hardcoded value is the first thing to check if something stops working!
 #define ADC_ATTEN_DB_11 3
@@ -42,6 +43,7 @@ static bool input_task_running = false;
 static uint32_t gamepad_state = -1; // _Atomic
 static uint32_t gamepad_mapped = 0;
 static rg_battery_t battery_state = {0};
+static uint8_t serial_state = 0;
 
 #define UPDATE_GLOBAL_MAP(keymap)                 \
     for (size_t i = 0; i < RG_COUNT(keymap); ++i) \
@@ -103,9 +105,27 @@ bool rg_input_read_battery_raw(rg_battery_t *out)
     return true;
 }
 
+static rg_key_t serial_map[] = {
+    RG_KEY_LEFT,   // Bit 0
+    RG_KEY_RIGHT,  // Bit 1
+    RG_KEY_UP,     // Bit 2
+    RG_KEY_DOWN,   // Bit 3
+    RG_KEY_A,  // Bit 4
+    RG_KEY_B, // Bit 5
+    RG_KEY_SELECT,   // Bit 6
+    RG_KEY_MENU,     // Bit 7
+    // The rest are unused for now
+};
+
 bool rg_input_read_gamepad_raw(uint32_t *out)
 {
     uint32_t state = 0;
+
+    for (int n = 0; n < 8 ; n++) {
+        if (serial_state & (1 << n)) {
+            state |= serial_map[n];
+        }
+    }
 
 #if defined(RG_GAMEPAD_ADC_MAP)
     static int old_adc_values[RG_COUNT(keymap_adc)];
@@ -265,6 +285,43 @@ static void input_task(void *arg)
     gamepad_state = -1;
 }
 
+static void serial_input_task(void *arg)
+{
+    #define TXD_PIN (GPIO_NUM_10)
+    #define RXD_PIN (GPIO_NUM_9)
+    #define UART_NUM UART_NUM_2
+    static const int RX_BUF_SIZE = 128;
+
+    const uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+
+    RG_LOGI("Initializing Ventilastation Serial gamepad driver...");
+    // We won't use a buffer for sending data.
+    uart_driver_install(UART_NUM, RX_BUF_SIZE * 2, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM, &uart_config);
+    uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    RG_LOGI("Waiting for serial data...");
+    // static const char *RX_TASK_TAG = "VS_SERIAL_RX_TASK";
+    // esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
+    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE+1);
+    while (1) {
+        const int rxBytes = uart_read_bytes(UART_NUM, data, 1, 200 / portTICK_PERIOD_MS);
+        if (rxBytes > 0) {
+            serial_state = data[0];
+            RG_LOGI("got serial data: %02X", serial_state);
+        }
+    }
+    free(data);
+}
+
+
 void rg_input_init(void)
 {
     RG_ASSERT(!input_task_running, "Input already initialized!");
@@ -362,6 +419,8 @@ void rg_input_init(void)
     while (gamepad_state == -1)
         rg_task_yield();
     RG_LOGI("Input ready. state=" PRINTF_BINARY_16 "\n", PRINTF_BINVAL_16(gamepad_state));
+
+    rg_task_create("rg_serial_input", &serial_input_task, NULL, 2 * 1024, RG_TASK_PRIORITY_5, 1);
 }
 
 void rg_input_deinit(void)

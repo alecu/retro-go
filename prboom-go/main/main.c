@@ -42,10 +42,48 @@
 #include <oplplayer.h>
 #include <rg_system.h>
 #include <math.h>
+
+#include <driver/gpio.h>
+
+#include <hal/spi_types.h>
+#include <driver/spi_common.h>
+#include <driver/spi_master.h>
+#include <esp_err.h>
+#include <intensidades.h>
+
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 #include "main.h"
 #endif
+
+// For the Ventilastation POV display
+#define GPIO_HALL_B     GPIO_NUM_5
+#define LEDS_SPI_HOST   SPI2_HOST
+#define PIN_NUM_MOSI    16
+#define PIN_NUM_CLK     15
+
+#define ESP_INTR_FLAG_DEFAULT 0
+#define COLUMNS 256
+#define PIXELS 54
+#define FASTEST_CREDIBLE_TURN 10000 // if the fan is going over 100 FPS, then I don't believe it, and discard the reading
+
+static uint8_t *vs_data = NULL;
+static uint32_t *vs_palette = NULL;
+static uint16_t *vs_projection_table = NULL;
+
+static rg_task_t *vs_task_queue;
+char* spi_buf;
+uint32_t* extra_buf;
+uint32_t* pixels0;
+uint32_t* pixels1;
+int buf_size;
+extern uint8_t brillos[PIXELS];
+extern uint8_t intensidades_por_led[PIXELS];
+
+volatile int64_t last_turn = 0;
+volatile int64_t last_turn_duration = 102400;
+
+// end ventilastation stuff
 
 #define AUDIO_SAMPLE_RATE 22050
 
@@ -57,10 +95,6 @@ static rg_app_t *app;
 
 static const char *doom_argv[10];
 
-// // ventilastation buffers
-static uint8_t *vs_data = NULL;
-static uint32_t *vs_palette = NULL;
-static uint16_t *vs_projection_table = NULL;
 
 // Expected variables by doom
 int snd_card = 1, mus_card = 1;
@@ -146,18 +180,18 @@ void I_UpdateNoBlit(void)
 
 void I_FinishUpdate(void)
 {
-    static int framecount = 0;
-    framecount++;
+    // static int framecount = 0;
     // está por acá la cosa...
-    rg_display_submit(update, 0);
-    rg_display_sync(true); // Wait for update->buffer to be released
+    // rg_display_submit(update, 0);
+    // rg_display_sync(true); // Wait for update->buffer to be released
     memcpy(vs_data, update->data, SCREENWIDTH * SCREENHEIGHT);
-    if (framecount == 60)
-    {
-        framecount = 0;
-        //dump_vs_data(dumpbuf);
-        dump_vs_projected();
-    }
+    // framecount++;
+    // if (framecount == 60)
+    // {
+    //     framecount = 0;
+    //     //dump_vs_data(dumpbuf);
+    //     dump_vs_projected();
+    // }
 }
 
 
@@ -195,7 +229,12 @@ void project_angle(int angle, uint32_t row[54])
         int x = ((pos >> 8) & 0xFF) - 128 + SCREENWIDTH / 2;
         int y = (pos & 0xFF) - 128 + SCREENHEIGHT / 2;
         uint8_t px = vs_data[y * SCREENWIDTH + x];
-        uint32_t color = vs_palette[px];
+        uint32_t doom_color = vs_palette[px];
+        int alt_n = intensidades_por_led[led];
+        uint32_t color = (brillos[led] & 0x1f) | 0xe0 |
+                intensidades[alt_n][(doom_color & 0xff0000) >> 16] << 24 |
+                intensidades[alt_n][(doom_color & 0x00ff00) >> 8] << 16 |
+                intensidades[alt_n][(doom_color & 0x0000ff)] << 8;
         row[led] = color;
     }
 }
@@ -603,7 +642,7 @@ static void event_handler(int event, void *arg)
     }
     else if (event == RG_EVENT_REDRAW)
     {
-        rg_display_submit(update, 0);
+        // rg_display_submit(update, 0);
     }
 }
 
@@ -642,7 +681,7 @@ void app_main()
     SCREENWIDTH = RG_MIN(rg_display_get_width(), MAX_SCREENWIDTH);
     SCREENHEIGHT = RG_MIN(rg_display_get_height(), MAX_SCREENHEIGHT);
 
-    update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
+    update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_SLOW);
 
     ventilastation_init();
 
@@ -682,9 +721,146 @@ void app_main()
     D_DoomMain();
 }
 
+
+// Ventilastation POV display support
+static spi_device_handle_t spi_handle;
+
+
+void spiStartBuses(uint32_t freq) {
+    //printf("Initializing bus SPI%d...\n", LEDS_SPI_HOST+1);
+
+    esp_err_t ret;
+    RG_LOGI("init spi bus");
+    const spi_bus_config_t buscfg={
+            .miso_io_num = -1,
+            .mosi_io_num = PIN_NUM_MOSI,
+            .sclk_io_num = PIN_NUM_CLK,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = 32,
+    };
+    ret = spi_bus_initialize(LEDS_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    RG_ASSERT(ret == ESP_OK || ret == ESP_ERR_INVALID_STATE, "spi_bus_initialize failed.");
+        //const TickType_t xDelay = 500 / portTICK_PERIOD_MS;
+        //vTaskDelay( xDelay );
+
+    RG_LOGI("adding spi device");
+    const spi_device_interface_config_t devcfg = {
+            .clock_speed_hz = SPI_MASTER_FREQ_20M,     //Clock out at 20 MHz
+            .mode = 0,                              //SPI mode 0
+            .spics_io_num = -1,             //CS pin
+            .queue_size = 2,
+    };
+    ret = spi_bus_add_device(LEDS_SPI_HOST, &devcfg, &spi_handle);
+    RG_ASSERT(ret == ESP_OK, "spi_bus_add_device failed.");
+    //printf("adding device returned... %d\n", ret);
+    RG_LOGI("spi bus ready");
+}
+
+void spiAcquire() {
+    esp_err_t ret;
+    ret = spi_device_acquire_bus(spi_handle, portMAX_DELAY);
+    ESP_ERROR_CHECK(ret);
+}
+
+char* init_buffers(int num_pixels) {
+    RG_LOGI("alloc spi buffer");
+    spi_buf=heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
+    memset(spi_buf, 0xff, buf_size);
+    RG_LOGI("alloc extra buffer");
+    extra_buf=heap_caps_malloc(buf_size/2, MALLOC_CAP_DEFAULT);
+    RG_LOGI("cleaning up buffers");
+    memset(extra_buf, 0x01, buf_size/2);
+    ((uint32_t*)spi_buf)[0]=0;
+    pixels0 = (uint32_t*)(spi_buf+4);
+    pixels1 = (uint32_t*)(spi_buf+num_pixels*4);
+    for(int n=0; n<num_pixels; n++) {
+        pixels0[n] = 0x010000Ff;
+        pixels1[n] = 0x000100Ff;
+    }
+    RG_LOGI("buffers initialized");
+    return spi_buf;
+}
+
+void vsspi_init(int num_pixels) {
+    buf_size = 4 + num_pixels * 4 * 2 + 8;
+    RG_LOGI("Initializing buffers");
+    init_buffers(num_pixels);
+}
+
+void spiWriteNL(int device, const void * data_in, size_t len){
+    esp_err_t ret;
+    spi_transaction_t transaction = {
+        .length=len*8,
+            .tx_buffer=data_in,
+            //.flags=SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL
+    };
+    ret = spi_device_polling_transmit(spi_handle, &transaction);
+    ESP_ERROR_CHECK(ret);
+}
+
+volatile int turns = 0;
+
+static void IRAM_ATTR hall_neg_sensed(void* arg)
+{
+    int64_t this_turn = rg_system_timer();
+    int64_t this_turn_duration = this_turn - last_turn;
+    if (this_turn_duration > FASTEST_CREDIBLE_TURN) {
+        last_turn_duration = this_turn_duration;
+        last_turn = this_turn;
+    }
+    turns++;
+}
+
+void hall_init(int gpio_hall) {
+    gpio_set_direction(gpio_hall, GPIO_MODE_INPUT);
+    gpio_set_intr_type(gpio_hall, GPIO_INTR_NEGEDGE);
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    gpio_isr_handler_add(gpio_hall, hall_neg_sensed, (void*) gpio_hall);
+}
+
+int last_column = 0;
+void gpu_step() {
+    int64_t now = rg_system_timer();
+    uint32_t column = ((now - last_turn) * COLUMNS / last_turn_duration) % COLUMNS;
+    if (column != last_column) {
+        project_angle((column + COLUMNS/2) % COLUMNS, extra_buf);
+        for(int n=0; n<54; n++) {
+            pixels0[n] = extra_buf[53-n];
+        }
+        project_angle(column, pixels1);
+        spiWriteNL(2, spi_buf, buf_size);
+        last_column = column;
+        // if (column == 0) {
+        //     RG_LOGI("turns: %d (level = %d)", turns, gpio_get_level(GPIO_HALL_B));
+        // }
+    }
+}
+
+
+IRAM_ATTR
+static void vs_display_task(void *arg)
+{
+    RG_LOGI("Hall Sensor init");
+    hall_init(GPIO_HALL_B);
+
+    const long freq = 20000000;
+    RG_LOGI("Starting Buses");
+    spiStartBuses(freq);
+    RG_LOGI("Buses Started");
+
+    spiAcquire();
+    while (true) {
+        gpu_step();
+    }
+    vTaskDelete(NULL);
+}
+
 void ventilastation_init()
 {
     // Initialize ventilastation
+    RG_LOGI("Ventilastation allocs");
+
     vs_data = rg_alloc(SCREENWIDTH * SCREENHEIGHT, MEM_FAST);
     vs_palette = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
     vs_projection_table = rg_alloc(256 * 54 * sizeof(uint16_t), MEM_FAST);
@@ -694,6 +870,12 @@ void ventilastation_init()
     memset(vs_projection_table, 0, 256 * 54 * sizeof(uint16_t));
 
     vs_setup_projection_table();
+
+    RG_LOGI("Ventilastation init");
+    vsspi_init(PIXELS);
+    
+    RG_LOGI("Ventilastation start task");
+    vs_task_queue = rg_task_create("vs_display", &vs_display_task, NULL, 2 * 1024, RG_TASK_PRIORITY_6, 1);
 }
 
 void dump_vs_projection_table()
@@ -733,5 +915,5 @@ void vs_setup_projection_table()
             vs_projection_table[m * n_led + n] = (x << 8) + y;
         }
     }
-    dump_vs_projection_table();
+    // dump_vs_projection_table();
 }

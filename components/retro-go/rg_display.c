@@ -65,6 +65,7 @@ static inline unsigned blend_pixels(unsigned a, unsigned b)
 
 static inline void write_update(const rg_surface_t *update)
 {
+    return;
     const int64_t time_start = rg_system_timer();
 
     bool filter_x = display.viewport.filter_x;

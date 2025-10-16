@@ -15,7 +15,7 @@
 
 // Video
 #define RG_SCREEN_DRIVER            0   // 0 = ILI9341/ST7789
-#define RG_SCREEN_HOST              SPI2_HOST
+#define RG_SCREEN_HOST              SPI3_HOST
 #define RG_SCREEN_SPEED             SPI_MASTER_FREQ_40M // SPI_MASTER_FREQ_80M
 #define RG_SCREEN_BACKLIGHT         1
 #define RG_SCREEN_WIDTH             320
@@ -50,6 +50,8 @@
 // # ADC_1_5 = GPIO6
 // # ADC_1_6 = GPIO7
 
+/*
+
 #define RG_GAMEPAD_ADC_MAP {\
     {RG_KEY_UP,    ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 3072, 4096},\
     {RG_KEY_RIGHT, ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 0, 1024},\
@@ -64,6 +66,8 @@
     {RG_KEY_A,      .num = GPIO_NUM_42, .pullup = 1, .level = 0},\
     {RG_KEY_B,      .num = GPIO_NUM_2,  .pullup = 1, .level = 0},\
 }
+*/
+
 
 // Battery
 // # ADC_1_3 = GPIO4
@@ -84,7 +88,7 @@
 #define RG_GPIO_LCD_CS              GPIO_NUM_8
 #define RG_GPIO_LCD_DC              GPIO_NUM_15
 #define RG_GPIO_LCD_BCKL            GPIO_NUM_NC
-#define RG_GPIO_LCD_RST             GPIO_NUM_9
+#define RG_GPIO_LCD_RST             GPIO_NUM_5
 
 // #define RG_GPIO_SDSPI_MISO          GPIO_NUM_13
 // #define RG_GPIO_SDSPI_MOSI          GPIO_NUM_11
@@ -95,7 +99,7 @@
 #define RG_GPIO_SDSPI_CLK           GPIO_NUM_12
 #define RG_GPIO_SDSPI_CMD           GPIO_NUM_11
 #define RG_GPIO_SDSPI_D0            GPIO_NUM_13
-#define RG_GPIO_SDSPI_CS            GPIO_NUM_10
+#define RG_GPIO_SDSPI_CS            GPIO_NUM_14
 
 
 // // External I2S DAC

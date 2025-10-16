@@ -22,3 +22,4 @@ build/
 /gmon.out
 /*.exe
 prboom-go/components/.DS_Store
+povdisplay
