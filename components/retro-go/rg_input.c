@@ -121,11 +121,11 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
 {
     uint32_t state = 0;
 
-    for (int n = 0; n < 8 ; n++) {
-        if (serial_state & (1 << n)) {
-            state |= serial_map[n];
-        }
-    }
+    // for (int n = 0; n < 8 ; n++) {
+    //     if (serial_state & (1 << n)) {
+    //         state |= serial_map[n];
+    //     }
+    // }
 
 #if defined(RG_GAMEPAD_ADC_MAP)
     static int old_adc_values[RG_COUNT(keymap_adc)];
@@ -420,7 +420,7 @@ void rg_input_init(void)
         rg_task_yield();
     RG_LOGI("Input ready. state=" PRINTF_BINARY_16 "\n", PRINTF_BINVAL_16(gamepad_state));
 
-    rg_task_create("rg_serial_input", &serial_input_task, NULL, 2 * 1024, RG_TASK_PRIORITY_5, 1);
+    // rg_task_create("rg_serial_input", &serial_input_task, NULL, 2 * 1024, RG_TASK_PRIORITY_5, 1);
 }
 
 void rg_input_deinit(void)

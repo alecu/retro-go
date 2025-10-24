@@ -182,8 +182,8 @@ void I_FinishUpdate(void)
 {
     // static int framecount = 0;
     // está por acá la cosa...
-    // rg_display_submit(update, 0);
-    // rg_display_sync(true); // Wait for update->buffer to be released
+    rg_display_submit(update, 0);
+    rg_display_sync(true); // Wait for update->buffer to be released
     memcpy(vs_data, update->data, SCREENWIDTH * SCREENHEIGHT);
     // framecount++;
     // if (framecount == 60)
@@ -288,9 +288,9 @@ void I_SetPalette(int pal)
     Z_Free(palette);
     current_palette = pal;
 
-    uint32_t *pal32 = V_BuildPalette(pal, 32);
-    memcpy(vs_palette, pal32, 256 * 4);
-    Z_Free(pal32);
+    // uint32_t *pal32 = V_BuildPalette(pal, 32);
+    // memcpy(vs_palette, pal32, 256 * 4);
+    // Z_Free(pal32);
 }
 
 void I_InitGraphics(void)
@@ -642,7 +642,7 @@ static void event_handler(int event, void *arg)
     }
     else if (event == RG_EVENT_REDRAW)
     {
-        // rg_display_submit(update, 0);
+        rg_display_submit(update, 0);
     }
 }
 
@@ -681,9 +681,9 @@ void app_main()
     SCREENWIDTH = RG_MIN(rg_display_get_width(), MAX_SCREENWIDTH);
     SCREENHEIGHT = RG_MIN(rg_display_get_height(), MAX_SCREENHEIGHT);
 
-    update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_SLOW);
+    update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
 
-    ventilastation_init();
+    // ventilastation_init();
 
     const char *iwad = NULL;
     const char *pwad = NULL;
