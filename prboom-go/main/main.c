@@ -41,6 +41,7 @@
 #include <midifile.h>
 #include <oplplayer.h>
 #include <rg_system.h>
+#include "drivers/display/ventilastation_pov.h"
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 #endif
@@ -141,6 +142,7 @@ void I_FinishUpdate(void)
 {
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
+    rg_vs_pov_submit_frame(update->data, SCREENWIDTH * SCREENHEIGHT);
 }
 
 bool I_StartDisplay(void)
@@ -159,6 +161,11 @@ void I_SetPalette(int pal)
     for (int i = 0; i < 256; i++)
         update->palette[i] = palette[i] << 8 | palette[i] >> 8;
     Z_Free(palette);
+
+    uint32_t *palette32 = V_BuildPalette(pal, 32);
+    rg_vs_pov_set_palette32(palette32, 256);
+    Z_Free(palette32);
+
     current_palette = pal;
 }
 
@@ -548,6 +555,7 @@ void app_main()
     SCREENHEIGHT = RG_MIN(rg_display_get_height(), MAX_SCREENHEIGHT);
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
+    rg_vs_pov_init(SCREENWIDTH, SCREENHEIGHT);
 
     const char *iwad = NULL;
     const char *pwad = NULL;
