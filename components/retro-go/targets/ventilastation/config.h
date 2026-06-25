@@ -1,5 +1,5 @@
 // Target definition
-#define RG_TARGET_NAME             "ESP32S3-DEVKIT-C"
+#define RG_TARGET_NAME             "Ventilastation"
 
 // Storage
 #define RG_STORAGE_ROOT             "/sd"
@@ -82,7 +82,7 @@
 
 // Ventilastation POV display
 #define RG_VS_ENABLE_POV_DISPLAY    1
-#define RG_VS_HALL_GPIO             GPIO_NUM_5
+#define RG_VS_HALL_GPIO             GPIO_NUM_6
 #define RG_VS_LED_SPI_HOST          SPI2_HOST
 #define RG_VS_LED_MOSI              GPIO_NUM_16
 #define RG_VS_LED_CLK               GPIO_NUM_15
