@@ -146,7 +146,6 @@ void I_FinishUpdate(void)
 {
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
-    rg_vs_pov_submit_frame(update->data, SCREENWIDTH * SCREENHEIGHT);
 }
 
 bool I_StartDisplay(void)
@@ -608,7 +607,6 @@ void app_main()
     SCREENHEIGHT = RG_MIN(rg_display_get_height(), MAX_SCREENHEIGHT);
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
-    rg_vs_pov_init(SCREENWIDTH, SCREENHEIGHT);
 
     // Start WiFi and TCP bridge; register callbacks so the POV driver can
     // forward frames and palette to the desktop emulator.

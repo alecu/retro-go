@@ -1,5 +1,6 @@
 #include "rg_system.h"
 #include "rg_display.h"
+#include "drivers/display/ventilastation_pov.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -503,6 +504,10 @@ void rg_display_submit(const rg_surface_t *update, uint32_t flags)
         display.changed = true;
     }
 
+#if RG_VENTILASTATION_POV_ENABLED
+    rg_vs_pov_submit_surface(update);
+#endif
+
     rg_task_send(display_task_queue, &(rg_task_msg_t){.dataPtr = update});
 
     counters.blockTime += rg_system_timer() - time_start;
@@ -649,5 +654,8 @@ void rg_display_init(void)
     display_task_queue = rg_task_create("rg_display", &display_task, NULL, 4 * 1024, RG_TASK_PRIORITY_6, 1);
     if (config.border_file)
         load_border_file(config.border_file);
+#if RG_VENTILASTATION_POV_ENABLED
+    rg_vs_pov_init();
+#endif
     RG_LOGI("Display ready.\n");
 }

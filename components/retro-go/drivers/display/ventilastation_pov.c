@@ -21,7 +21,13 @@
 #define RG_VS_FASTEST_CREDIBLE_TURN_US 10000
 #define RG_VS_TAU 6.28318530717958647692
 
-static uint8_t *vs_data = NULL;
+// Indexed (palette) framebuffer — 1 byte per pixel, updated by rg_vs_pov_submit_surface().
+static uint8_t  *vs_data     = NULL;
+// Direct-RGB framebuffer — 0x00RRGGBB per pixel, used when surface format is not indexed.
+static uint32_t *vs_data_rgb = NULL;
+// Current surface pixel format (rg_pixel_format_t). Determines which buffer project_angle() reads.
+static int       vs_format   = 0;
+
 static uint32_t *vs_palette = NULL;
 static uint16_t *vs_projection_table = NULL;
 static spi_device_handle_t spi_handle;
@@ -34,11 +40,20 @@ static int screen_width = 0;
 static int screen_height = 0;
 static int last_column = 0;
 
+// True while framebuffers are being (re)allocated or the projection table is being rebuilt.
+// gpu_step() skips rendering while this is set. Initially true so the display task waits
+// for the first rg_vs_pov_submit_surface() call before touching vs_data.
+static volatile bool rebuilding = true;
+
 static volatile int64_t last_turn = 0;
 static volatile int64_t last_turn_duration = 102400;
 
 static rg_vs_tcp_send_fn      tcp_send_fn      = NULL;
 static rg_vs_tcp_connected_fn tcp_connected_fn = NULL;
+
+// Shared frame counter and connection state across indexed and RGB TCP send paths.
+static int  tcp_frame_count    = 0;
+static bool tcp_was_connected  = false;
 
 void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn)
 {
@@ -48,9 +63,6 @@ void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn 
 
 #define VS_TCP_FRAME_DIVISOR 2
 
-// Send the current vs_palette to the emulator in ABGR byte order (A, B, G, R
-// per entry) so the emulator's set_palettes() can apply its byte-swap and
-// produce the correct RGBA value for OpenGL.
 static void vs_tcp_send_palette(void)
 {
     if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
@@ -60,7 +72,7 @@ static void vs_tcp_send_palette(void)
     for (int i = 0; i < 256; i++)
     {
         uint32_t c = vs_palette[i]; // 0x00RRGGBB
-        buf[i * 4 + 0] = 0xFF;                 // A - fully opaque
+        buf[i * 4 + 0] = 0xFF;                 // A
         buf[i * 4 + 1] = (c >> 0)  & 0xFF;    // B
         buf[i * 4 + 2] = (c >> 8)  & 0xFF;    // G
         buf[i * 4 + 3] = (c >> 16) & 0xFF;    // R
@@ -68,30 +80,30 @@ static void vs_tcp_send_palette(void)
     tcp_send_fn("palette 1", buf, sizeof(buf));
 }
 
-// Project the current vs_data framebuffer to 256 columns × 54 palette
-// indices and send as a "frame" command.  Called every VS_TCP_FRAME_DIVISOR
-// Doom frames so we don't swamp the WiFi link.
-static void vs_tcp_send_frame(void)
+// Returns true if connected; handles reconnect detection and palette resend.
+static bool vs_tcp_check_connection(void)
 {
-    static int frame_count = 0;
-    static bool was_connected = false;
-
-    if (++frame_count % VS_TCP_FRAME_DIVISOR != 0)
-        return;
-
     if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
     {
-        was_connected = false;
-        return;
+        tcp_was_connected = false;
+        return false;
     }
-
-    // Resend palette whenever the emulator reconnects (it missed the initial one).
-    if (!was_connected)
+    if (!tcp_was_connected)
     {
-        was_connected = true;
+        tcp_was_connected = true;
         RG_LOGI("vs_pov: emulator (re)connected — resending palette\n");
         vs_tcp_send_palette();
     }
+    return true;
+}
+
+// Send indexed (palette-based) frame: 256 columns × 54 palette indices.
+static void vs_tcp_send_frame(void)
+{
+    if (++tcp_frame_count % VS_TCP_FRAME_DIVISOR != 0)
+        return;
+    if (!vs_tcp_check_connection())
+        return;
 
     static uint8_t tcp_frame[RG_VS_COLUMNS * RG_VS_PIXELS];
     for (int angle = 0; angle < RG_VS_COLUMNS; angle++)
@@ -104,8 +116,35 @@ static void vs_tcp_send_frame(void)
             tcp_frame[angle * RG_VS_PIXELS + led] = vs_data[y * screen_width + x];
         }
     }
-    RG_LOGI("vs_pov: sending frame #%d (%d bytes)\n", frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
+    RG_LOGD("vs_pov: sending frame #%d (%d bytes)\n", tcp_frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
     tcp_send_fn("frame", tcp_frame, sizeof(tcp_frame));
+}
+
+// Send RGB frame: 256 columns × 54 LEDs × 3 bytes (R, G, B).
+static void vs_tcp_send_frame_rgb(void)
+{
+    if (++tcp_frame_count % VS_TCP_FRAME_DIVISOR != 0)
+        return;
+    if (!vs_tcp_check_connection())
+        return;
+
+    static uint8_t tcp_frame[RG_VS_COLUMNS * RG_VS_PIXELS * 3];
+    for (int angle = 0; angle < RG_VS_COLUMNS; angle++)
+    {
+        for (int led = 0; led < RG_VS_PIXELS; led++)
+        {
+            uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
+            int x = ((pos >> 8) & 0xFF) - 128 + screen_width / 2;
+            int y = (pos & 0xFF)        - 128 + screen_height / 2;
+            uint32_t c = vs_data_rgb[y * screen_width + x]; // 0x00RRGGBB
+            int base = (angle * RG_VS_PIXELS + led) * 3;
+            tcp_frame[base + 0] = (c >> 16) & 0xFF; // R
+            tcp_frame[base + 1] = (c >> 8)  & 0xFF; // G
+            tcp_frame[base + 2] =  c        & 0xFF; // B
+        }
+    }
+    RG_LOGD("vs_pov: sending frame_rgb #%d (%d bytes)\n", tcp_frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
+    tcp_send_fn("frame_rgb", tcp_frame, sizeof(tcp_frame));
 }
 
 static void vs_setup_projection_table(void) {
@@ -127,8 +166,14 @@ static void project_angle(int angle, uint32_t row[RG_VS_PIXELS]) {
         uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
         int x = ((pos >> 8) & 0xff) - 128 + screen_width / 2;
         int y = (pos & 0xff) - 128 + screen_height / 2;
-        uint8_t px = vs_data[y * screen_width + x];
-        uint32_t doom_color = vs_palette[px];
+
+        uint32_t doom_color;
+        if (vs_format & RG_PIXEL_PALETTE) {
+            doom_color = vs_palette[vs_data[y * screen_width + x]];
+        } else {
+            doom_color = vs_data_rgb[y * screen_width + x];
+        }
+
         int level = intensidades_por_led[led];
         uint32_t color = (brillos[led] & 0x1f) | 0xe0 |
             intensidades[level][(doom_color & 0xff0000) >> 16] << 24 |
@@ -210,6 +255,8 @@ static void hall_init(void) {
 }
 
 static void gpu_step(void) {
+    if (rebuilding)
+        return;
     int64_t now = rg_system_timer();
     uint32_t column = ((now - last_turn) * RG_VS_COLUMNS / last_turn_duration) % RG_VS_COLUMNS;
     if (column != last_column) {
@@ -236,39 +283,135 @@ bool rg_vs_pov_enabled(void) {
     return true;
 }
 
-void rg_vs_pov_init(int width, int height) {
-    screen_width = width;
-    screen_height = height;
-
-    vs_data = rg_alloc((size_t)screen_width * (size_t)screen_height, MEM_FAST);
-    vs_palette = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
+void rg_vs_pov_init(void) {
+    vs_palette          = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
     vs_projection_table = rg_alloc(RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint16_t), MEM_FAST);
-    RG_ASSERT(vs_data && vs_palette && vs_projection_table, "ventilastation POV alloc failed");
+    RG_ASSERT(vs_palette && vs_projection_table, "ventilastation POV alloc failed");
 
-    memset(vs_data, 0, (size_t)screen_width * (size_t)screen_height);
     memset(vs_palette, 0, 256 * sizeof(uint32_t));
     memset(vs_projection_table, 0, RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint16_t));
 
-    vs_setup_projection_table();
+    // vs_data / vs_data_rgb allocated lazily in rg_vs_pov_submit_surface().
+    // rebuilding stays true until then so gpu_step() doesn't touch NULL pointers.
+
     vsspi_init();
     rg_task_create("vs_display", &vs_display_task, NULL, 2 * 1024, RG_TASK_PRIORITY_6, 1);
 }
 
-void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
-    if (!vs_palette || !palette) {
+void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count)
+{
+    if (!vs_palette || !palette)
         return;
-    }
-    if (count > 256) {
+    if (count > 256)
         count = 256;
-    }
     memcpy(vs_palette, palette, count * sizeof(uint32_t));
     vs_tcp_send_palette();
 }
 
-void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
-    if (!vs_data || !framebuffer) {
+void rg_vs_pov_submit_surface(const rg_surface_t *surface)
+{
+    if (!surface || !surface->data)
         return;
+
+    // (Re)allocate framebuffers and rebuild projection table when dimensions change.
+    if (screen_width != surface->width || screen_height != surface->height)
+    {
+        rebuilding = true;
+        rg_free(vs_data);     vs_data     = NULL;
+        rg_free(vs_data_rgb); vs_data_rgb = NULL;
+
+        screen_width  = surface->width;
+        screen_height = surface->height;
+        size_t n = (size_t)screen_width * screen_height;
+
+        vs_data     = rg_alloc(n,                    MEM_FAST);
+        vs_data_rgb = rg_alloc(n * sizeof(uint32_t), MEM_FAST);
+        RG_ASSERT(vs_data && vs_data_rgb, "ventilastation POV surface alloc failed");
+
+        memset(vs_data,     0, n);
+        memset(vs_data_rgb, 0, n * sizeof(uint32_t));
+        vs_setup_projection_table();
+        rebuilding = false;
     }
+
+    vs_format = surface->format;
+
+    if (surface->format & RG_PIXEL_PALETTE)
+    {
+        // Indexed surface: 1 byte per pixel.
+        const uint8_t *src = (const uint8_t *)surface->data;
+        int src_stride = surface->stride ? surface->stride : surface->width;
+        if (src_stride == surface->width)
+        {
+            memcpy(vs_data, src, (size_t)surface->width * surface->height);
+        }
+        else
+        {
+            for (int y = 0; y < surface->height; y++)
+                memcpy(vs_data + y * surface->width, src + y * src_stride, surface->width);
+        }
+
+        // Derive vs_palette from the surface's RGB565 palette (big-endian for PAL565_BE).
+        if (surface->palette)
+        {
+            bool be = (surface->format & ~RG_PIXEL_PALETTE) == RG_PIXEL_565_BE;
+            for (int i = 0; i < 256; i++)
+            {
+                uint16_t p = surface->palette[i];
+                if (be) p = __builtin_bswap16(p);
+                uint32_t r = ((p >> 11) & 0x1F) * 255 / 31;
+                uint32_t g = ((p >> 5)  & 0x3F) * 255 / 63;
+                uint32_t b = ( p        & 0x1F) * 255 / 31;
+                vs_palette[i] = (r << 16) | (g << 8) | b;
+            }
+        }
+        vs_tcp_send_frame();
+    }
+    else
+    {
+        // Direct RGB surface: convert to 0x00RRGGBB and store in vs_data_rgb.
+        int w = surface->width, h = surface->height;
+
+        if (surface->format == RG_PIXEL_565_LE || surface->format == RG_PIXEL_565_BE)
+        {
+            const uint16_t *src = (const uint16_t *)surface->data;
+            int src_stride_px = surface->stride ? (surface->stride / 2) : w;
+            bool be = (surface->format == RG_PIXEL_565_BE);
+            for (int y = 0; y < h; y++)
+            {
+                const uint16_t *row = src + y * src_stride_px;
+                uint32_t *dst = vs_data_rgb + y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    uint16_t p = row[x];
+                    if (be) p = __builtin_bswap16(p);
+                    uint32_t r = ((p >> 11) & 0x1F) * 255 / 31;
+                    uint32_t g = ((p >> 5)  & 0x3F) * 255 / 63;
+                    uint32_t b = ( p        & 0x1F) * 255 / 31;
+                    dst[x] = (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+        else if (surface->format == RG_PIXEL_888)
+        {
+            const uint8_t *src = (const uint8_t *)surface->data;
+            int src_stride_b = surface->stride ? surface->stride : (w * 3);
+            for (int y = 0; y < h; y++)
+            {
+                const uint8_t *row = src + y * src_stride_b;
+                uint32_t *dst = vs_data_rgb + y * w;
+                for (int x = 0; x < w; x++)
+                    dst[x] = ((uint32_t)row[x*3] << 16) | ((uint32_t)row[x*3+1] << 8) | row[x*3+2];
+            }
+        }
+        vs_tcp_send_frame_rgb();
+    }
+}
+
+void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length)
+{
+    if (!vs_data || !framebuffer)
+        return;
     memcpy(vs_data, framebuffer, length);
     vs_tcp_send_frame();
 }
@@ -279,14 +422,16 @@ bool rg_vs_pov_enabled(void) {
     return false;
 }
 
-void rg_vs_pov_init(int screen_width, int screen_height) {
-    (void)screen_width;
-    (void)screen_height;
+void rg_vs_pov_init(void) {
 }
 
 void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
     (void)palette;
     (void)count;
+}
+
+void rg_vs_pov_submit_surface(const rg_surface_t *surface) {
+    (void)surface;
 }
 
 void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
