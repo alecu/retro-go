@@ -7,6 +7,8 @@
 
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #endif
 
 #include "applications.h"
@@ -440,6 +442,17 @@ static void about_handler(rg_gui_option_t *dest)
 
 void app_main(void)
 {
+    // Reset OTA boot target to MicroPython BEFORE anything that can crash so
+    // a panic here doesn't boot-loop into the launcher indefinitely.
+#ifdef ESP_PLATFORM
+    {
+        const esp_partition_t *factory = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+        if (factory)
+            esp_ota_set_boot_partition(factory);
+    }
+#endif
+
     const rg_handlers_t handlers = {
         .event = &event_handler,
         .options = &options_handler,
