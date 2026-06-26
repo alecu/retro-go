@@ -42,8 +42,12 @@
 #include <oplplayer.h>
 #include <rg_system.h>
 #include "drivers/display/ventilastation_pov.h"
+#include "wifi_bridge.h"
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <esp_littlefs.h>
 #endif
 
 #define AUDIO_SAMPLE_RATE 22050
@@ -422,12 +426,31 @@ void I_SetMusicVolume(int volume)
     music_player->setvolume(volume);
 }
 
+// Emulator input byte bit positions → RG key masks
+// bit0=left, bit1=right, bit2=up, bit3=down, bit4=fire/A, bit5=B, bit6=start, bit7=menu/esc
+static const uint32_t emu_bit_to_rg_key[8] = {
+    RG_KEY_LEFT, RG_KEY_RIGHT, RG_KEY_UP, RG_KEY_DOWN,
+    RG_KEY_A, RG_KEY_B, RG_KEY_START, RG_KEY_MENU,
+};
+
 void I_StartTic(void)
 {
     static int64_t last_time = 0;
     static int32_t prev_joystick = 0x0000;
     static int32_t rg_menu_delay = 0;
     uint32_t joystick = rg_input_read_gamepad();
+
+    // Merge TCP button input from the desktop emulator
+    int tcp_byte = wb_recv_input();
+    if (tcp_byte >= 0)
+    {
+        for (int bit = 0; bit < 8; bit++)
+        {
+            if (tcp_byte & (1 << bit))
+                joystick |= emu_bit_to_rg_key[bit];
+        }
+    }
+
     uint32_t changed = prev_joystick ^ joystick;
     event_t event = {0};
 
@@ -548,14 +571,49 @@ void app_main()
         .options = &options_handler,
     };
 
+    // Reset OTA boot target to MicroPython BEFORE anything that can crash.
+    // If rg_system_init() panics (missing SD, display fault, etc.) the next
+    // reboot must return to MicroPython, not loop back into prboom-go.
+#ifdef ESP_PLATFORM
+    {
+        const esp_partition_t *factory = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+        if (factory)
+            esp_ota_set_boot_partition(factory);
+    }
+#endif
+
     app = rg_system_init(AUDIO_SAMPLE_RATE, &handlers, NULL);
     rg_system_set_tick_rate(TICRATE);
+
+#ifdef ESP_PLATFORM
+    // Mount the MicroPython VFS flash partition (LittleFS2) at /vfs so we can
+    // read doom1.wad that was included in the VFS image by build_micropython_fs.py.
+    {
+        esp_vfs_littlefs_conf_t lfs_conf = {
+            .base_path = "/vfs",
+            .partition_label = "vfs",
+            .format_if_mount_failed = false,
+            .read_only = true,
+        };
+        esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+        if (lfs_err != ESP_OK)
+            RG_LOGW("VFS LittleFS mount failed (%d) — WAD must be on SD card\n", lfs_err);
+        else
+            RG_LOGI("VFS LittleFS mounted at /vfs\n");
+    }
+#endif
 
     SCREENWIDTH = RG_MIN(rg_display_get_width(), MAX_SCREENWIDTH);
     SCREENHEIGHT = RG_MIN(rg_display_get_height(), MAX_SCREENHEIGHT);
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
     rg_vs_pov_init(SCREENWIDTH, SCREENHEIGHT);
+
+    // Start WiFi and TCP bridge; register callbacks so the POV driver can
+    // forward frames and palette to the desktop emulator.
+    wb_init();
+    rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
 
     const char *iwad = NULL;
     const char *pwad = NULL;
@@ -567,8 +625,14 @@ void app_main()
 
     if (!iwad)
     {
-        iwad = rg_gui_file_picker("Select IWAD file", I_DoomExeDir(), is_iwad, false, false) ?: "";
-        rg_gui_draw_hourglass(); // Redraw hourglass to indicate loading...
+        // Prefer the WAD shipped in the MicroPython VFS flash partition.
+        if (is_iwad("/vfs/roms/doom/doom1.wad"))
+            iwad = "/vfs/roms/doom/doom1.wad";
+        else
+        {
+            iwad = rg_gui_file_picker("Select IWAD file", I_DoomExeDir(), is_iwad, false, false) ?: "";
+            rg_gui_draw_hourglass(); // Redraw hourglass to indicate loading...
+        }
     }
 
     myargv = doom_argv;

@@ -37,6 +37,77 @@ static int last_column = 0;
 static volatile int64_t last_turn = 0;
 static volatile int64_t last_turn_duration = 102400;
 
+static rg_vs_tcp_send_fn      tcp_send_fn      = NULL;
+static rg_vs_tcp_connected_fn tcp_connected_fn = NULL;
+
+void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn)
+{
+    tcp_send_fn      = send_fn;
+    tcp_connected_fn = connected_fn;
+}
+
+#define VS_TCP_FRAME_DIVISOR 2
+
+// Send the current vs_palette to the emulator in ABGR byte order (A, B, G, R
+// per entry) so the emulator's set_palettes() can apply its byte-swap and
+// produce the correct RGBA value for OpenGL.
+static void vs_tcp_send_palette(void)
+{
+    if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
+        return;
+
+    uint8_t buf[256 * 4];
+    for (int i = 0; i < 256; i++)
+    {
+        uint32_t c = vs_palette[i]; // 0x00RRGGBB
+        buf[i * 4 + 0] = 0xFF;                 // A - fully opaque
+        buf[i * 4 + 1] = (c >> 0)  & 0xFF;    // B
+        buf[i * 4 + 2] = (c >> 8)  & 0xFF;    // G
+        buf[i * 4 + 3] = (c >> 16) & 0xFF;    // R
+    }
+    tcp_send_fn("palette 1", buf, sizeof(buf));
+}
+
+// Project the current vs_data framebuffer to 256 columns × 54 palette
+// indices and send as a "frame" command.  Called every VS_TCP_FRAME_DIVISOR
+// Doom frames so we don't swamp the WiFi link.
+static void vs_tcp_send_frame(void)
+{
+    static int frame_count = 0;
+    static bool was_connected = false;
+
+    if (++frame_count % VS_TCP_FRAME_DIVISOR != 0)
+        return;
+
+    if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
+    {
+        was_connected = false;
+        return;
+    }
+
+    // Resend palette whenever the emulator reconnects (it missed the initial one).
+    if (!was_connected)
+    {
+        was_connected = true;
+        RG_LOGI("vs_pov: emulator (re)connected — resending palette\n");
+        vs_tcp_send_palette();
+    }
+
+    static uint8_t tcp_frame[RG_VS_COLUMNS * RG_VS_PIXELS];
+    for (int angle = 0; angle < RG_VS_COLUMNS; angle++)
+    {
+        for (int led = 0; led < RG_VS_PIXELS; led++)
+        {
+            uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
+            int x = ((pos >> 8) & 0xFF) - 128 + screen_width / 2;
+            int y = (pos & 0xFF)        - 128 + screen_height / 2;
+            tcp_frame[angle * RG_VS_PIXELS + led] = vs_data[y * screen_width + x];
+        }
+    }
+    RG_LOGI("vs_pov: sending frame #%d (%d bytes)\n", frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
+    tcp_send_fn("frame", tcp_frame, sizeof(tcp_frame));
+}
+
 static void vs_setup_projection_table(void) {
     int center_x = screen_width / 2;
     int center_y = screen_height / 2;
@@ -191,6 +262,7 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
         count = 256;
     }
     memcpy(vs_palette, palette, count * sizeof(uint32_t));
+    vs_tcp_send_palette();
 }
 
 void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
@@ -198,6 +270,7 @@ void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
         return;
     }
     memcpy(vs_data, framebuffer, length);
+    vs_tcp_send_frame();
 }
 
 #else
@@ -219,6 +292,11 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
 void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
     (void)framebuffer;
     (void)length;
+}
+
+void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn) {
+    (void)send_fn;
+    (void)connected_fn;
 }
 
 #endif

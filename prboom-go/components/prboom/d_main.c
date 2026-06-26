@@ -537,11 +537,16 @@ bool D_AddFile(const char *file)
 
   snprintf(relpath, PATH_MAX, "%s/%s", I_DoomExeDir(), file);
 
-  if (access(relpath, R_OK) == 0)
+  if (access(relpath, R_OK) == 0) {
     file = relpath;
-  else if (access(file, R_OK) != 0) {
-    lprintf(LO_WARN, "D_AddFile: %s not found\n", file);
-    return false;
+  } else if (access(file, R_OK) != 0) {
+    // access() may not work on all VFS backends (e.g. LittleFS); fall back to fopen
+    FILE *probe = fopen(file, "rb");
+    if (!probe) {
+      lprintf(LO_WARN, "D_AddFile: %s not found\n", file);
+      return false;
+    }
+    fclose(probe);
   }
 
   wadfile_info_t wadfile = {
