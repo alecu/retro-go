@@ -17,6 +17,8 @@
 #include "gui.h"
 #include "webui.h"
 #include "updater.h"
+#include "wifi_bridge.h"
+#include "drivers/display/ventilastation_pov.h"
 
 static rg_app_t *app;
 
@@ -462,6 +464,11 @@ void app_main(void)
     app = rg_system_init(32000, &handlers, NULL);
     app->configNs = "launcher";
     app->isLauncher = true;
+
+#if RG_VENTILASTATION_POV_ENABLED
+    wb_init();
+    rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
+#endif
 
     if (!rg_storage_ready())
     {
