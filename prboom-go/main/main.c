@@ -442,15 +442,18 @@ void I_StartTic(void)
     uint32_t joystick = rg_input_read_gamepad();
 
 #if RG_VS_ENABLE_TCP_BRIDGE
-    // Merge TCP button input from the desktop emulator
-    int tcp_byte = wb_recv_input();
-    if (tcp_byte >= 0)
+    // Merge TCP button input from the desktop emulator. The emulator sends a byte
+    // only when the button state changes, so latch the most recent value and
+    // re-apply it every tick — otherwise a held button would read as released on
+    // the very next tick. Drain any backlog, keeping the latest state.
+    static int tcp_buttons = 0;
+    int tcp_byte;
+    while ((tcp_byte = wb_recv_input()) >= 0)
+        tcp_buttons = tcp_byte;
+    for (int bit = 0; bit < 8; bit++)
     {
-        for (int bit = 0; bit < 8; bit++)
-        {
-            if (tcp_byte & (1 << bit))
-                joystick |= emu_bit_to_rg_key[bit];
-        }
+        if (tcp_buttons & (1 << bit))
+            joystick |= emu_bit_to_rg_key[bit];
     }
 #endif
 
