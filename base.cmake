@@ -9,6 +9,14 @@ macro(rg_setup_compile_options)
         ${ARGV}
     )
 
+    # Ventilastation POV output mode (0 = drive SPI LEDs, 1 = TCP emulator bridge).
+    # Forwarded to every app component (main, prboom, ...) so that main.c's
+    # #if RG_VS_ENABLE_TCP_BRIDGE matches the retro-go driver. When passed on the
+    # command line it overrides the per-target default in config.h.
+    if(DEFINED RG_VS_ENABLE_TCP_BRIDGE)
+        component_compile_options(-DRG_VS_ENABLE_TCP_BRIDGE=${RG_VS_ENABLE_TCP_BRIDGE})
+    endif()
+
     # The PSRAM cache bug is responsible for many subtile bugs and crashes. The workaround has a
     # significant performance impact but the alternative is instability... Enabling the fix here
     # instead of sdkconfig prevents the new libc and wifi from being linked in which increases

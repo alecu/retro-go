@@ -5,10 +5,10 @@
 #define RG_APP_LAUNCHER            "factory"
 #define RG_APP_FACTORY             "factory"
 
-// Storage
-#define RG_STORAGE_ROOT             "/sd"
-#define RG_STORAGE_SDSPI_HOST       SPI2_HOST
-#define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
+// Storage: no SD card — use the LittleFS VFS partition already mounted at /vfs by prboom-go
+#define RG_STORAGE_ROOT             "/vfs"
+// #define RG_STORAGE_SDSPI_HOST       SPI2_HOST
+// #define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
 // #define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_FLASH_PARTITION  "vfs"
@@ -48,28 +48,15 @@
     ILI9341_CMD(0xE1, 0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F);
 
 
-// Input
+// Input: no physical buttons — all input comes from the WiFi TCP bridge (wifi_bridge.c)
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
 
-// # ADC_1_5 = GPIO6
-// # ADC_1_6 = GPIO7
+// # ADC_1_5 = GPIO6 (joystick Y — not populated)
+// # ADC_1_6 = GPIO7 (joystick X — not populated)
+// Floating ADC pins produce garbage readings, so the ADC map is disabled.
 
-
-
-#define RG_GAMEPAD_ADC_MAP {\
-    {RG_KEY_UP,    ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 3072, 4096},\
-    {RG_KEY_RIGHT, ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 0, 1024},\
-    {RG_KEY_DOWN,  ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 0, 1024},\
-    {RG_KEY_LEFT,  ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 3072, 4096},\
-}
-#define RG_GAMEPAD_GPIO_MAP {\
-    {RG_KEY_SELECT, .num = GPIO_NUM_38, .pullup = 1, .level = 0},\
-    {RG_KEY_START,  .num = GPIO_NUM_39, .pullup = 1, .level = 0},\
-    {RG_KEY_MENU,   .num = GPIO_NUM_40, .pullup = 1, .level = 0},\
-    {RG_KEY_OPTION, .num = GPIO_NUM_41, .pullup = 1, .level = 0},\
-    {RG_KEY_A,      .num = GPIO_NUM_42, .pullup = 1, .level = 0},\
-    {RG_KEY_B,      .num = GPIO_NUM_2,  .pullup = 1, .level = 0},\
-}
+// #define RG_GAMEPAD_ADC_MAP { ... }  -- disabled: no joystick hardware
+// #define RG_GAMEPAD_GPIO_MAP { ... } -- disabled: no button hardware
 
 
 // Battery
@@ -90,6 +77,13 @@
 #define RG_VS_LED_SPI_HOST          SPI2_HOST
 #define RG_VS_LED_MOSI              GPIO_NUM_16
 #define RG_VS_LED_CLK               GPIO_NUM_15
+
+// POV output mode: 0 = drive the spinning LED strip over SPI (real hardware),
+// 1 = stream frames to the desktop pyglet emulator over TCP/WiFi (development).
+// Override at build time without editing this file: -DRG_VS_ENABLE_TCP_BRIDGE=1
+#ifndef RG_VS_ENABLE_TCP_BRIDGE
+#define RG_VS_ENABLE_TCP_BRIDGE     0
+#endif
 
 // SPI Display (back up working)
 #define RG_GPIO_LCD_MISO            GPIO_NUM_17

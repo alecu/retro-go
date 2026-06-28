@@ -43,6 +43,13 @@ if(RG_BUILD_RELEASE)
     component_compile_options(-DRG_BUILD_RELEASE=1)
 endif()
 
+# Ventilastation POV output mode. When passed (-DRG_VS_ENABLE_TCP_BRIDGE=0/1),
+# this overrides the per-target default in config.h: 0 = drive the spinning LED
+# strip over SPI, 1 = stream frames to the desktop emulator over TCP.
+if(DEFINED RG_VS_ENABLE_TCP_BRIDGE)
+    component_compile_options(-DRG_VS_ENABLE_TCP_BRIDGE=${RG_VS_ENABLE_TCP_BRIDGE})
+endif()
+
 set(RG_BUILD_INFO "${RG_BUILD_TARGET}-${RG_BUILD_RELEASE} ${PROJECT_VER} SDK:${IDF_VER} ${IDF_TARGET}")
 string(TIMESTAMP RG_BUILD_TIME "%s")
 

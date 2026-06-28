@@ -425,12 +425,14 @@ void I_SetMusicVolume(int volume)
     music_player->setvolume(volume);
 }
 
+#if RG_VS_ENABLE_TCP_BRIDGE
 // Emulator input byte bit positions → RG key masks
 // bit0=left, bit1=right, bit2=up, bit3=down, bit4=fire/A, bit5=B, bit6=start, bit7=menu/esc
 static const uint32_t emu_bit_to_rg_key[8] = {
     RG_KEY_LEFT, RG_KEY_RIGHT, RG_KEY_UP, RG_KEY_DOWN,
     RG_KEY_A, RG_KEY_B, RG_KEY_START, RG_KEY_MENU,
 };
+#endif
 
 void I_StartTic(void)
 {
@@ -439,6 +441,7 @@ void I_StartTic(void)
     static int32_t rg_menu_delay = 0;
     uint32_t joystick = rg_input_read_gamepad();
 
+#if RG_VS_ENABLE_TCP_BRIDGE
     // Merge TCP button input from the desktop emulator
     int tcp_byte = wb_recv_input();
     if (tcp_byte >= 0)
@@ -449,6 +452,7 @@ void I_StartTic(void)
                 joystick |= emu_bit_to_rg_key[bit];
         }
     }
+#endif
 
     uint32_t changed = prev_joystick ^ joystick;
     event_t event = {0};
@@ -593,7 +597,7 @@ void app_main()
             .base_path = "/vfs",
             .partition_label = "vfs",
             .format_if_mount_failed = false,
-            .read_only = true,
+            .read_only = false,
         };
         esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
         if (lfs_err != ESP_OK)
@@ -608,10 +612,17 @@ void app_main()
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
 
-    // Start WiFi and TCP bridge; register callbacks so the POV driver can
-    // forward frames and palette to the desktop emulator.
+    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
+#if RG_VS_ENABLE_TCP_BRIDGE
+    // Development: bring up WiFi + TCP bridge and register callbacks so the POV
+    // driver forwards frames and palette to the desktop pyglet emulator.
     wb_init();
     rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
+#else
+    // Hardware: no bridge — the POV driver drives the spinning LED strip over SPI.
+    // Still call this (with NULLs) so the display task knows the mode and starts.
+    rg_vs_pov_set_tcp_bridge(NULL, NULL);
+#endif
 
     const char *iwad = NULL;
     const char *pwad = NULL;

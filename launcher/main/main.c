@@ -20,6 +20,10 @@
 #include "wifi_bridge.h"
 #include "drivers/display/ventilastation_pov.h"
 
+#if RG_VENTILASTATION_POV_ENABLED
+#include <esp_littlefs.h>
+#endif
+
 static rg_app_t *app;
 
 #define SETTING_WEBUI "HTTPFileServer"
@@ -466,8 +470,28 @@ void app_main(void)
     app->isLauncher = true;
 
 #if RG_VENTILASTATION_POV_ENABLED
+    {
+        esp_vfs_littlefs_conf_t lfs_conf = {
+            .base_path = "/vfs",
+            .partition_label = "vfs",
+            .format_if_mount_failed = false,
+            .read_only = false,
+        };
+        esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+        if (lfs_err != ESP_OK)
+            RG_LOGW("VFS LittleFS mount failed (%d)\n", lfs_err);
+        else
+            RG_LOGI("VFS LittleFS mounted at /vfs\n");
+    }
+    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
+#if RG_VS_ENABLE_TCP_BRIDGE
+    // Development: stream POV frames to the desktop pyglet emulator over TCP.
     wb_init();
     rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
+#else
+    // Hardware: drive the spinning LED strip over SPI (no bridge).
+    rg_vs_pov_set_tcp_bridge(NULL, NULL);
+#endif
 #endif
 
     if (!rg_storage_ready())

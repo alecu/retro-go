@@ -120,6 +120,9 @@ def build_app(app, device_type, with_profiling=False, no_networking=False, is_re
     args.append(f"-DRG_BUILD_RELEASE={1 if is_release else 0}")
     args.append(f"-DRG_ENABLE_PROFILING={1 if with_profiling else 0}")
     args.append(f"-DRG_ENABLE_NETWORKING={0 if no_networking else 1}")
+    # Extra CMake defines injected by the caller (e.g. the Makefile's emulator
+    # targets pass -DRG_VS_ENABLE_TCP_BRIDGE=1). See components/retro-go/CMakeLists.txt.
+    args.extend(os.getenv("RG_TOOL_EXTRA_DEFINES", "").split())
     with open("partitions.csv", "w") as f:
         f.write("# This table isn't used, it's just needed to avoid esp-idf build failures.\n")
         f.write("dummy, app, ota_0, 65536, 3145728\n")
