@@ -42,7 +42,8 @@
 #include <oplplayer.h>
 #include <rg_system.h>
 #include "drivers/display/ventilastation_pov.h"
-#include "wifi_bridge.h"
+#include "host_comms.h"
+#include "voom_audio_bridge.h"
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
@@ -229,6 +230,10 @@ int I_StartSound(int sfxid, int channel, int vol, int sep, int pitch, int priori
     // Unknown sound
     if (!sfx[sfxid])
         return -1;
+
+    // Mirror the trigger to the host (emulator over TCP / hardware over serial),
+    // which owns the WAD audio and actually plays it. The board has no speaker.
+    voom_audio_sfx(S_sfx[sfxid].name);
 
     // These sound are played only once at a time. Stop any running ones.
     if (sfxid == sfx_sawup || sfxid == sfx_sawidl || sfxid == sfx_sawful
@@ -425,14 +430,13 @@ void I_SetMusicVolume(int volume)
     music_player->setvolume(volume);
 }
 
-#if RG_VS_ENABLE_TCP_BRIDGE
-// Emulator input byte bit positions → RG key masks
+// Host input byte bit positions → RG key masks. The desktop emulator (TCP) and
+// the hardware base-station (serial) both send the same one-byte bitmask.
 // bit0=left, bit1=right, bit2=up, bit3=down, bit4=fire/A, bit5=B, bit6=start, bit7=menu/esc
 static const uint32_t emu_bit_to_rg_key[8] = {
     RG_KEY_LEFT, RG_KEY_RIGHT, RG_KEY_UP, RG_KEY_DOWN,
     RG_KEY_A, RG_KEY_B, RG_KEY_START, RG_KEY_MENU,
 };
-#endif
 
 void I_StartTic(void)
 {
@@ -441,21 +445,19 @@ void I_StartTic(void)
     static int32_t rg_menu_delay = 0;
     uint32_t joystick = rg_input_read_gamepad();
 
-#if RG_VS_ENABLE_TCP_BRIDGE
-    // Merge TCP button input from the desktop emulator. The emulator sends a byte
-    // only when the button state changes, so latch the most recent value and
-    // re-apply it every tick — otherwise a held button would read as released on
-    // the very next tick. Drain any backlog, keeping the latest state.
-    static int tcp_buttons = 0;
-    int tcp_byte;
-    while ((tcp_byte = wb_recv_input()) >= 0)
-        tcp_buttons = tcp_byte;
+    // Merge host button input (TCP emulator or serial hardware host). The host
+    // sends a byte only when the button state changes, so latch the most recent
+    // value and re-apply it every tick — otherwise a held button would read as
+    // released on the very next tick. Drain any backlog, keeping the latest state.
+    static int host_buttons = 0;
+    int host_byte;
+    while ((host_byte = host_recv_input()) >= 0)
+        host_buttons = host_byte;
     for (int bit = 0; bit < 8; bit++)
     {
-        if (tcp_buttons & (1 << bit))
+        if (host_buttons & (1 << bit))
             joystick |= emu_bit_to_rg_key[bit];
     }
-#endif
 
     uint32_t changed = prev_joystick ^ joystick;
     event_t event = {0};
@@ -615,15 +617,18 @@ void app_main()
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
 
+    // Bring up the host comms transport used for sound/music triggers and input:
+    // the WiFi/TCP bridge in emulator mode, the UART serial link in hardware mode.
+    host_init();
+
     // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
 #if RG_VS_ENABLE_TCP_BRIDGE
-    // Development: bring up WiFi + TCP bridge and register callbacks so the POV
-    // driver forwards frames and palette to the desktop pyglet emulator.
-    wb_init();
+    // Development: register callbacks so the POV driver forwards frames and palette
+    // to the desktop pyglet emulator over the TCP bridge.
     rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
 #else
-    // Hardware: no bridge — the POV driver drives the spinning LED strip over SPI.
-    // Still call this (with NULLs) so the display task knows the mode and starts.
+    // Hardware: no display bridge — the POV driver drives the spinning LED strip
+    // over SPI. Still call this (with NULLs) so the display task starts.
     rg_vs_pov_set_tcp_bridge(NULL, NULL);
 #endif
 

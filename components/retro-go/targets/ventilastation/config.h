@@ -89,6 +89,15 @@
 #define RG_VS_ENABLE_TCP_BRIDGE     0
 #endif
 
+// Hardware-mode host link (RG_VS_ENABLE_TCP_BRIDGE=0): the spinning board talks
+// to the base-station host over UART2 — sound/music triggers out, input bytes in
+// — matching the MicroPython serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9,
+// 115200 8N1, the machine.UART default). Unused in TCP/emulator mode.
+#define RG_VS_SERIAL_UART_NUM       2
+#define RG_VS_SERIAL_TX             GPIO_NUM_10
+#define RG_VS_SERIAL_RX             GPIO_NUM_9
+#define RG_VS_SERIAL_BAUD           115200
+
 // SPI Display (back up working)
 #define RG_GPIO_LCD_MISO            GPIO_NUM_17
 #define RG_GPIO_LCD_MOSI            GPIO_NUM_18
