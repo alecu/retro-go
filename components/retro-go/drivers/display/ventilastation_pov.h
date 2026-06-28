@@ -6,6 +6,13 @@
 
 #include "rg_surface.h"
 
+// Pull in the target config so RG_VS_ENABLE_POV_DISPLAY is defined before the
+// guard below is evaluated. Without this, a translation unit that includes this
+// header before rg_system.h/config.h (e.g. ventilastation_pov.c itself, which
+// includes its own header first) would see RG_VS_ENABLE_POV_DISPLAY undefined,
+// silently compiling the whole POV driver down to no-op stubs.
+#include "config.h"
+
 #if defined(ESP_PLATFORM) && defined(RG_VS_ENABLE_POV_DISPLAY) && (RG_VS_ENABLE_POV_DISPLAY)
 #define RG_VENTILASTATION_POV_ENABLED 1
 #else

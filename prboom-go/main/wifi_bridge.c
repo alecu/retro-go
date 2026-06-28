@@ -185,10 +185,10 @@ disconnect:
 
 int wb_recv_input(void)
 {
-    // Do NOT call wb_try_accept() here — accept is owned by wb_connected() so
-    // that the connection is used to send at least one frame before we try to
-    // recv().  Calling recv() on the same tick as accept() causes an immediate
-    // n=0 / ENOTCONN return in LWIP before the TCP layer is ready.
+    // Accept new connections every tick so the emulator can connect even before
+    // the first frame is sent (e.g. when the fan isn't spinning yet).
+    wb_try_accept();
+
     if (client_fd < 0)
         return -1;
 
@@ -196,7 +196,8 @@ int wb_recv_input(void)
     int n = recv(client_fd, &byte, 1, 0);
     if (n == 1)
         return (int)byte;
-    if (n < 0 && errno == EAGAIN)
+    // EAGAIN = no data yet; ENOTCONN = TCP handshake still in progress after accept()
+    if (n < 0 && (errno == EAGAIN || errno == ENOTCONN))
         return -1;
 
     // n == 0 means clean close; n < 0 with other errno means error

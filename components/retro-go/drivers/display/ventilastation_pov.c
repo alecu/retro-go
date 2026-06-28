@@ -55,13 +55,22 @@ static rg_vs_tcp_connected_fn tcp_connected_fn = NULL;
 static int  tcp_frame_count    = 0;
 static bool tcp_was_connected  = false;
 
+// Set by rg_vs_pov_set_tcp_bridge() to signal the display task whether to use SPI.
+// vs_display_task waits on vs_mode_set before touching any SPI hardware, so that
+// desktop mode (TCP bridge active) can skip the SPI acquisition entirely and keep
+// the LCD display task unblocked.
+static volatile bool vs_mode_set  = false;  // rg_vs_pov_set_tcp_bridge() was called
+static volatile bool vs_tcp_mode  = false;  // true = desktop/emulator, skip SPI
+
 void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn)
 {
     tcp_send_fn      = send_fn;
     tcp_connected_fn = connected_fn;
+    vs_tcp_mode      = (send_fn != NULL);
+    vs_mode_set      = true;
 }
 
-#define VS_TCP_FRAME_DIVISOR 2
+#define VS_TCP_FRAME_DIVISOR 1
 
 static void vs_tcp_send_palette(void)
 {
@@ -83,8 +92,14 @@ static void vs_tcp_send_palette(void)
 // Returns true if connected; handles reconnect detection and palette resend.
 static bool vs_tcp_check_connection(void)
 {
-    if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
+    bool has_send = (tcp_send_fn != NULL);
+    bool has_conn = (tcp_connected_fn != NULL);
+    bool is_conn  = has_conn && tcp_connected_fn();
+    if (!has_send || !has_conn || !is_conn)
     {
+        if (tcp_frame_count % 30 == 0)
+            RG_LOGI("vs_pov: check_connection: has_send=%d has_conn=%d is_conn=%d was=%d\n",
+                    (int)has_send, (int)has_conn, (int)is_conn, (int)tcp_was_connected);
         tcp_was_connected = false;
         return false;
     }
@@ -206,11 +221,6 @@ static void spi_start_buses(void) {
     RG_ASSERT(ret == ESP_OK, "spi_bus_add_device failed.");
 }
 
-static void spi_acquire(void) {
-    esp_err_t ret = spi_device_acquire_bus(spi_handle, portMAX_DELAY);
-    ESP_ERROR_CHECK(ret);
-}
-
 static void vsspi_init(void) {
     buf_size = 4 + RG_VS_PIXELS * 4 * 2 + 8;
     spi_buf = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
@@ -272,8 +282,20 @@ static void gpu_step(void) {
 
 static void IRAM_ATTR vs_display_task(void *arg) {
     hall_init();
+    // Wait for rg_vs_pov_set_tcp_bridge() to tell us the operating mode.
+    while (!vs_mode_set)
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+    if (vs_tcp_mode) {
+        // Desktop/emulator: no SPI hardware needed — yield forever so the
+        // LCD display task can use the SPI bus uncontested.
+        while (true)
+            vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    // Hardware mode: acquire the bus once and keep driving the LED strip.
     spi_start_buses();
-    spi_acquire();
+    ESP_ERROR_CHECK(spi_device_acquire_bus(spi_handle, portMAX_DELAY));
     while (true) {
         gpu_step();
     }
@@ -312,13 +334,16 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
 {
     if (!surface || !surface->data)
         return;
+    if (tcp_frame_count % 30 == 0)
+        RG_LOGI("vs_pov: submit_surface frame=%d sz=%dx%d fmt=%d tcp_mode=%d\n",
+                tcp_frame_count, surface->width, surface->height, surface->format, (int)vs_tcp_mode);
 
     // (Re)allocate framebuffers and rebuild projection table when dimensions change.
     if (screen_width != surface->width || screen_height != surface->height)
     {
         rebuilding = true;
-        rg_free(vs_data);     vs_data     = NULL;
-        rg_free(vs_data_rgb); vs_data_rgb = NULL;
+        free(vs_data);     vs_data     = NULL;
+        free(vs_data_rgb); vs_data_rgb = NULL;
 
         screen_width  = surface->width;
         screen_height = surface->height;
