@@ -18,7 +18,11 @@
 #define RG_AUDIO_USE_EXT_DAC        0   // 0 = Disable, 1 = Enable
 
 // Video
-#define RG_SCREEN_DRIVER            0   // 0 = ILI9341/ST7789
+// No LCD: the POV LED strip is the display and owns SPI2 (RG_VS_LED_* share the
+// same bus/pins as the LCD would). Use the dummy driver so the retro-go display
+// task never touches SPI — otherwise, in hardware POV mode, vs_display_task holds
+// the bus and the LCD task panics in spi_take_buffer.
+#define RG_SCREEN_DRIVER            2   // 0 = ILI9341/ST7789, 99 = SDL2, other = dummy (no LCD)
 #define RG_SCREEN_HOST              SPI2_HOST
 #define RG_SCREEN_SPEED             SPI_MASTER_FREQ_40M // SPI_MASTER_FREQ_80M
 #define RG_SCREEN_BACKLIGHT         1
