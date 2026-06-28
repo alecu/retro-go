@@ -66,26 +66,12 @@ int snd_card = 1, mus_card = 1;
 int snd_samplerate = AUDIO_SAMPLE_RATE;
 int current_palette = 0;
 
-typedef struct {
-    uint16_t unused1;
-    uint16_t samplerate;
-    uint16_t length;
-    uint16_t unused2;
-    byte samples[];
-} doom_sfx_t;
-
-typedef struct {
-    const doom_sfx_t *sfx;
-    size_t pos;
-    float factor;
-    int starttic;
-} channel_t;
-
-static channel_t channels[NUM_MIX_CHANNELS];
-static const doom_sfx_t *sfx[NUMSFX];
-static rg_audio_sample_t mixbuffer[AUDIO_BUFFER_LENGTH];
-static const music_player_t *music_player = &opl_synth_player;
-static bool musicPlaying = false;
+// This board has no audio output: in both POV modes (spinning LEDs and the
+// desktop emulator) sound and music are played by the host, triggered over the
+// comms bridge (see voom_audio_bridge.c and s_sound.c). So the local DMX sound
+// mixer and the OPL FM music synth are disabled — the I_*Sound / I_*Song handlers
+// below only forward triggers and are otherwise no-ops. This saves CPU (no mixer
+// task, no FM synthesis) and RAM (no cached sound lumps, no mix buffer).
 
 // TO DO: Detect when menu is open so we can send better keys.
 
@@ -224,210 +210,69 @@ void I_UpdateSoundParams(int handle, int volume, int seperation, int pitch)
 
 int I_StartSound(int sfxid, int channel, int vol, int sep, int pitch, int priority)
 {
-    int oldest = gametic;
-    int slot = 0;
-
-    // Unknown sound
-    if (!sfx[sfxid])
+    // No local mixing — forward the trigger to the host, which plays the sound
+    // from its own copy of the WAD. Validate the id via the sound's lump.
+    if (sfxid <= 0 || sfxid >= NUMSFX || S_sfx[sfxid].lumpnum < 0)
         return -1;
 
-    // Mirror the trigger to the host (emulator over TCP / hardware over serial),
-    // which owns the WAD audio and actually plays it. The board has no speaker.
     voom_audio_sfx(S_sfx[sfxid].name);
-
-    // These sound are played only once at a time. Stop any running ones.
-    if (sfxid == sfx_sawup || sfxid == sfx_sawidl || sfxid == sfx_sawful
-        || sfxid == sfx_sawhit || sfxid == sfx_stnmov || sfxid == sfx_pistol)
-    {
-        for (int i = 0; i < NUM_MIX_CHANNELS; i++)
-        {
-            if (channels[i].sfx == sfx[sfxid])
-                channels[i].sfx = NULL;
-        }
-    }
-
-    // Find available channel or steal the oldest
-    for (int i = 0; i < NUM_MIX_CHANNELS; i++)
-    {
-        if (channels[i].sfx == NULL)
-        {
-            slot = i;
-            break;
-        }
-        else if (channels[i].starttic < oldest)
-        {
-            slot = i;
-            oldest = channels[i].starttic;
-        }
-    }
-
-    channel_t *chan = &channels[slot];
-    chan->sfx = sfx[sfxid];
-    chan->factor = (float)chan->sfx->samplerate / snd_samplerate;
-    chan->pos = 0;
-
-    return slot;
+    return channel;
 }
 
 void I_StopSound(int handle)
 {
-    if (handle < NUM_MIX_CHANNELS)
-        channels[handle].sfx = NULL;
 }
 
 bool I_SoundIsPlaying(int handle)
 {
-    // return (handle < NUM_MIX_CHANNELS && channels[handle].sfx);
     return false;
 }
 
 bool I_AnySoundStillPlaying(void)
 {
-    for (int i = 0; i < NUM_MIX_CHANNELS; i++)
-        if (channels[i].sfx)
-            return true;
     return false;
-}
-
-static void soundTask(void *arg)
-{
-    while (1)
-    {
-        bool haveMusic = snd_MusicVolume > 0 && musicPlaying;
-        bool haveSFX = snd_SfxVolume > 0 && I_AnySoundStillPlaying();
-
-        if (haveMusic)
-        {
-            music_player->render(mixbuffer, AUDIO_BUFFER_LENGTH);
-        }
-
-        if (haveSFX)
-        {
-            int16_t *audioBuffer = (int16_t *)mixbuffer;
-            int16_t *audioBufferEnd = audioBuffer + AUDIO_BUFFER_LENGTH * 2;
-            while (audioBuffer < audioBufferEnd)
-            {
-                int totalSample = 0;
-                int totalSources = 0;
-                int sample;
-
-                for (int i = 0; i < NUM_MIX_CHANNELS; i++)
-                {
-                    channel_t *chan = &channels[i];
-                    if (!chan->sfx)
-                        continue;
-
-                    size_t pos = (size_t)(chan->pos++ * chan->factor);
-
-                    if (pos >= chan->sfx->length)
-                    {
-                        chan->sfx = NULL;
-                    }
-                    else if ((sample = chan->sfx->samples[pos]))
-                    {
-                        totalSample += sample - 127;
-                        totalSources++;
-                    }
-                }
-
-                totalSample <<= 7;
-                totalSample /= (16 - snd_SfxVolume);
-
-                if (haveMusic)
-                {
-                    totalSample += *audioBuffer;
-                    totalSources += (totalSources == 0);
-                }
-
-                if (totalSources > 0)
-                    totalSample /= totalSources;
-
-                if (totalSample > 32767)
-                    totalSample = 32767;
-                else if (totalSample < -32768)
-                    totalSample = -32768;
-
-                *audioBuffer++ = totalSample;
-                *audioBuffer++ = totalSample;
-            }
-        }
-
-        if (!haveMusic && !haveSFX)
-        {
-            memset(mixbuffer, 0, sizeof(mixbuffer));
-        }
-
-        rg_audio_submit(mixbuffer, AUDIO_BUFFER_LENGTH);
-    }
 }
 
 void I_InitSound(void)
 {
-    for (int i = 1; i < NUMSFX; i++)
-    {
-        if (S_sfx[i].lumpnum != -1)
-            sfx[i] = W_CacheLumpNum(S_sfx[i].lumpnum);
-    }
-
-    music_player->init(snd_samplerate);
-    music_player->setvolume(snd_MusicVolume);
-
-    rg_task_create("doom_sound", &soundTask, NULL, 2048, RG_TASK_PRIORITY_2, 1);
+    // No local audio output on this board; sound and music are played by the
+    // host. Nothing to initialise: no mixer task, no OPL synth, no cached lumps.
 }
 
 void I_ShutdownSound(void)
 {
-    music_player->shutdown();
 }
 
 void I_PlaySong(int handle, int looping)
 {
-    music_player->play((void *)handle, looping);
-    musicPlaying = true;
 }
 
 void I_PauseSong(int handle)
 {
-    music_player->pause();
-    musicPlaying = false;
 }
 
 void I_ResumeSong(int handle)
 {
-    music_player->resume();
-    musicPlaying = true;
 }
 
 void I_StopSong(int handle)
 {
-    music_player->stop();
-    musicPlaying = false;
 }
 
 void I_UnRegisterSong(int handle)
 {
-    music_player->unregistersong((void *)handle);
 }
 
 int I_RegisterSong(const void *data, size_t len)
 {
-    uint8_t *mid = NULL;
-    size_t midlen;
-    int handle = 0;
-
-    if (mus2mid(data, len, &mid, &midlen, 64) == 0)
-        handle = (int)music_player->registersong(mid, midlen);
-    else
-        handle = (int)music_player->registersong(data, len);
-
-    free(mid);
-
-    return handle;
+    // The host renders music from its own WAD; no local song to register.
+    (void)data;
+    (void)len;
+    return 1;
 }
 
 void I_SetMusicVolume(int volume)
 {
-    music_player->setvolume(volume);
 }
 
 // Host input byte bit positions → RG key masks. The desktop emulator (TCP) and
