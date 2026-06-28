@@ -21,6 +21,13 @@
 #define RG_VS_FASTEST_CREDIBLE_TURN_US 10000
 #define RG_VS_TAU 6.28318530717958647692
 
+// Rotate the projected image by this many columns (256 columns = one full turn).
+// The board's angle-0 ray and the emulator's fixed column->screen-angle mapping
+// differ by a quarter turn, so without this offset the picture appears rotated
+// 90 degrees clockwise. 64 columns = 90 degrees counter-clockwise, which lines
+// up all four cardinal directions. Adjust if the orientation is still off.
+#define RG_VS_ANGLE_OFFSET 64
+
 // Indexed (palette) framebuffer — 1 byte per pixel, updated by rg_vs_pov_submit_surface().
 static uint8_t  *vs_data     = NULL;
 // Direct-RGB framebuffer — 0x00RRGGBB per pixel, used when surface format is not indexed.
@@ -168,9 +175,10 @@ static void vs_setup_projection_table(void) {
     int radius = RG_MIN(center_x, center_y) - 2;
 
     for (int angle = 0; angle < RG_VS_COLUMNS; angle++) {
+        double a = (angle + RG_VS_ANGLE_OFFSET) * RG_VS_TAU / RG_VS_COLUMNS;
         for (int led = 0; led < RG_VS_PIXELS; led++) {
-            int x = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * cos(angle * RG_VS_TAU / RG_VS_COLUMNS));
-            int y = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * sin(angle * RG_VS_TAU / RG_VS_COLUMNS));
+            int x = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * cos(a));
+            int y = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * sin(a));
             vs_projection_table[angle * RG_VS_PIXELS + led] = (x << 8) + y;
         }
     }
