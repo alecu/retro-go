@@ -97,6 +97,13 @@ static inline unsigned blend_pixels(unsigned a, unsigned b)
 
 static inline void write_update(const rg_surface_t *update)
 {
+    // Dummy driver: lcd_send_buffer is a no-op, so the conversion loop below
+    // would only burn core 1 CPU time that vs_display needs for the LED SPI loop.
+#if RG_SCREEN_DRIVER != 0 && RG_SCREEN_DRIVER != 1 && RG_SCREEN_DRIVER != 99
+    (void)update;
+    return;
+#endif
+
     const int64_t time_start = rg_system_timer();
 
     bool filter_x = display.viewport.filter_x;
