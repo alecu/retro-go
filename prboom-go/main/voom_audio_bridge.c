@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 
-// Doom short names are at most 6 chars; "music voom/" + name + NUL fits easily.
+// Doom short names are at most 6 chars; "music voom/" + name + " loop" + NUL fits easily.
 #define VOOM_AUDIO_LINE_MAX 32
 
 void voom_audio_sfx(const char *name)
@@ -16,7 +16,8 @@ void voom_audio_sfx(const char *name)
 void voom_audio_music(const char *name)
 {
     char line[VOOM_AUDIO_LINE_MAX];
-    snprintf(line, sizeof(line), "music voom/%s", name);
+    // Doom level music loops until the level changes; the host honors the "loop" flag.
+    snprintf(line, sizeof(line), "music voom/%s loop", name);
     host_send(line, NULL, 0);
 }
 
