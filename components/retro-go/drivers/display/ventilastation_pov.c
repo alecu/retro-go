@@ -12,6 +12,8 @@
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <nvs.h>
+#include <nvs_flash.h>
 
 #include "intensidades.h"
 #include "rg_system.h"
@@ -21,12 +23,13 @@
 #define RG_VS_FASTEST_CREDIBLE_TURN_US 10000
 #define RG_VS_TAU 6.28318530717958647692
 
-// Rotate the projected image by this many columns (256 columns = one full turn).
-// The board's angle-0 ray and the emulator's fixed column->screen-angle mapping
-// differ by a quarter turn, so without this offset the picture appears rotated
-// 90 degrees clockwise. 64 columns = 90 degrees counter-clockwise, which lines
-// up all four cardinal directions. Adjust if the orientation is still off.
+// Base rotation offset (columns, 256 = one full turn): compensates for the
+// quarter-turn difference between the board's angle-0 ray and the screen mapping.
+// The runtime value vs_angle_offset adds the user-calibrated pov_column_offset
+// (written to NVS by MicroPython before launching this app) on top of this.
 #define RG_VS_ANGLE_OFFSET 64
+
+static int vs_angle_offset = RG_VS_ANGLE_OFFSET;
 
 // Indexed (palette) framebuffer — 1 byte per pixel, updated by rg_vs_pov_submit_surface().
 static uint8_t  *vs_data     = NULL;
@@ -104,8 +107,8 @@ static bool vs_tcp_check_connection(void)
     bool is_conn  = has_conn && tcp_connected_fn();
     if (!has_send || !has_conn || !is_conn)
     {
-        if (tcp_frame_count % 30 == 0)
-            RG_LOGI("vs_pov: check_connection: has_send=%d has_conn=%d is_conn=%d was=%d\n",
+        if (tcp_frame_count % 300 == 0)
+            RG_LOGD("vs_pov: check_connection: has_send=%d has_conn=%d is_conn=%d was=%d\n",
                     (int)has_send, (int)has_conn, (int)is_conn, (int)tcp_was_connected);
         tcp_was_connected = false;
         return false;
@@ -175,7 +178,7 @@ static void vs_setup_projection_table(void) {
     int radius = RG_MIN(center_x, center_y) - 2;
 
     for (int angle = 0; angle < RG_VS_COLUMNS; angle++) {
-        double a = (angle + RG_VS_ANGLE_OFFSET) * RG_VS_TAU / RG_VS_COLUMNS;
+        double a = (angle + vs_angle_offset) * RG_VS_TAU / RG_VS_COLUMNS;
         for (int led = 0; led < RG_VS_PIXELS; led++) {
             int x = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * cos(a));
             int y = 128 + (int)(radius * (led + 1) / RG_VS_PIXELS * sin(a));
@@ -314,6 +317,28 @@ bool rg_vs_pov_enabled(void) {
 }
 
 void rg_vs_pov_init(void) {
+    // Read pov_column_offset from NVS (written by MicroPython's _sync_pov_to_nvs()
+    // in native_apps.py before launching this app). nvs_flash_init() may not have
+    // been called yet (network init runs after display init), so we do it here.
+    {
+        esp_err_t err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            err = nvs_flash_init();
+        }
+        if (err == ESP_OK) {
+            nvs_handle_t h;
+            if (nvs_open("voom_pov", NVS_READONLY, &h) == ESP_OK) {
+                int32_t offset = 0;
+                if (nvs_get_i32(h, "col_offset", &offset) == ESP_OK) {
+                    vs_angle_offset = ((int)RG_VS_ANGLE_OFFSET + (int)offset + RG_VS_COLUMNS) % RG_VS_COLUMNS;
+                    RG_LOGI("vs_pov: NVS pov_column_offset=%d -> vs_angle_offset=%d\n", (int)offset, vs_angle_offset);
+                }
+                nvs_close(h);
+            }
+        }
+    }
+
     vs_palette          = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
     vs_projection_table = rg_alloc(RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint16_t), MEM_FAST);
     RG_ASSERT(vs_palette && vs_projection_table, "ventilastation POV alloc failed");
@@ -342,8 +367,8 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
 {
     if (!surface || !surface->data)
         return;
-    if (tcp_frame_count % 30 == 0)
-        RG_LOGI("vs_pov: submit_surface frame=%d sz=%dx%d fmt=%d tcp_mode=%d\n",
+    if (tcp_frame_count % 300 == 0)
+        RG_LOGD("vs_pov: submit_surface frame=%d sz=%dx%d fmt=%d tcp_mode=%d\n",
                 tcp_frame_count, surface->width, surface->height, surface->format, (int)vs_tcp_mode);
 
     // (Re)allocate framebuffers and rebuild projection table when dimensions change.
