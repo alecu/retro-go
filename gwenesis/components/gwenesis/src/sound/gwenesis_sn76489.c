@@ -33,6 +33,7 @@
 #include "gwenesis_bus.h"
 #include "gwenesis_sn76489.h"
 #include "gwenesis_savestate.h"
+#include "emu_audio_bridge.h" // Ventilastation: host audio bridge tap
 
 #define NoiseInitialState   0x8000  /* Initial state of shift register */
 #define PSG_CUTOFF          0x6     /* Value below which PSG does not output */
@@ -222,6 +223,10 @@ void gwenesis_SN76489_Write(int data, int target)
 {
   if (GWENESIS_AUDIO_ACCURATE == 1)
     gwenesis_SN76489_run(target);
+
+  // Ventilastation: tap the PSG byte for the host audio bridge, timestamped at
+  // this write's sample position in the frame (sn76489_run advanced the index).
+  emu_audio_write(EMU_OP_SN76489, (unsigned char)(data & 0xff), (unsigned short)sn76489_index);
 
   if (data & 0x80) {
     /* Latch/data byte  %1 cc t dddd */

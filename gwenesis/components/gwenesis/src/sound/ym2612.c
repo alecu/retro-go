@@ -139,6 +139,7 @@
 #include "ym2612.h"
 #include "gwenesis_bus.h"
 #include "gwenesis_savestate.h"
+#include "emu_audio_bridge.h" // Ventilastation: host audio bridge tap
 
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
@@ -2174,9 +2175,14 @@ void YM2612Write(unsigned int a, unsigned int v,  int target)
 
   //Sync
   if (GWENESIS_AUDIO_ACCURATE == 1)
-    ym2612_run(target); 
+    ym2612_run(target);
 
   v &= 0xff;  /* adjust to 8 bit bus */
+
+  // Ventilastation: tap the raw bus write for the host audio bridge. ym2612_run
+  // above has advanced ym2612_index to this write's sample position in the
+  // frame, so the host can replay it (a is 0..3) at the same instant.
+  emu_audio_write((unsigned char)(a & 3), (unsigned char)v, (unsigned short)ym2612_index);
 
   switch( a )
   {

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include <gwenesis.h>
+#include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
 
 #define AUDIO_SAMPLE_RATE (53267)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
@@ -259,6 +260,9 @@ void app_main(void)
     rg_system_set_tick_rate(60);
     app->frameskip = 3;
 
+    // Ventilastation: announce to the host so it resets its YM2612+SN76489 synth.
+    emu_audio_begin("genesis");
+
     extern unsigned char gwenesis_vdp_regs[0x20];
     extern unsigned int gwenesis_vdp_status;
     extern unsigned short CRAM565[256];
@@ -316,6 +320,9 @@ void app_main(void)
 
         sn76489_clock = sn76489_enabled ? 0 : 0x1000000;
         sn76489_index = 0;
+
+        // Ventilastation: start capturing this frame's chip register writes.
+        emu_audio_frame_begin();
 
         scan_line = 0;
 
@@ -382,6 +389,11 @@ void app_main(void)
             gwenesis_SN76489_run(system_clock);
             ym2612_run(system_clock);
         }
+
+        // Ventilastation: ship this frame's captured chip writes to the host.
+        // nsamples = the larger of the two chip sample counters (a disabled chip
+        // stays at 0), telling the host exactly how many samples to render.
+        emu_audio_frame_end((uint16_t)(ym2612_index > sn76489_index ? ym2612_index : sn76489_index));
 
         // reset m68k cycles to the begin of next frame cycle
         m68k.cycles -= system_clock;
