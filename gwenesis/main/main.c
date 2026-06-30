@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <nvs.h>
+#include <nvs_flash.h>
+
 #include <gwenesis.h>
 #include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
 
@@ -228,6 +231,33 @@ void app_main(void)
     VRAM = rg_alloc(VRAM_MAX_SIZE, MEM_FAST);
 
     RG_LOGI("Genesis start\n");
+
+    // Ventilastation: when launched standalone from MicroPython (no retro-go
+    // launcher), there are no bootArgs, so the ROM path is handed to us via NVS
+    // (namespace "voom_md", key "rom", a UTF-8 blob without a NUL terminator).
+    static char vs_rom_path[256];
+    if (!app->romPath || app->romPath[0] == '\0')
+    {
+        esp_err_t err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            err = nvs_flash_init();
+        }
+        if (err == ESP_OK) {
+            nvs_handle_t h;
+            if (nvs_open("voom_md", NVS_READONLY, &h) == ESP_OK) {
+                size_t len = sizeof(vs_rom_path) - 1;
+                if (nvs_get_blob(h, "rom", vs_rom_path, &len) == ESP_OK) {
+                    vs_rom_path[len] = '\0';
+                    app->romPath = vs_rom_path;
+                    RG_LOGI("Genesis: ROM from NVS voom_md/rom = %s\n", vs_rom_path);
+                }
+                nvs_close(h);
+            }
+        }
+    }
+    if (!app->romPath || app->romPath[0] == '\0')
+        RG_PANIC("No ROM path (set NVS voom_md/rom)");
 
     size_t rom_size;
     void *rom_data;

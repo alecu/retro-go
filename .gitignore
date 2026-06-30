@@ -22,3 +22,4 @@ managed_components
 /stdout.txt
 /gmon.out
 /*.exe
+roms/md/*
