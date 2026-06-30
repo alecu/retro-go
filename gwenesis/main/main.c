@@ -4,6 +4,7 @@
 
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <esp_littlefs.h>
 
 #include <gwenesis.h>
 #include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
@@ -213,6 +214,24 @@ void app_main(void)
     };
 
     app = rg_system_init(AUDIO_SAMPLE_RATE / 2, &handlers, NULL);
+
+    // Ventilastation: mount the shared LittleFS data partition at /vfs (the
+    // default rg_storage init mounts FAT, which this partition is not, so the
+    // launcher and prboom-go do the same). Without this, ROMs under
+    // RG_STORAGE_ROOT ("/vfs") cannot be opened.
+    {
+        esp_vfs_littlefs_conf_t lfs_conf = {
+            .base_path = "/vfs",
+            .partition_label = "vfs",
+            .format_if_mount_failed = false,
+            .read_only = false,
+        };
+        esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+        if (lfs_err != ESP_OK)
+            RG_LOGW("VFS LittleFS mount failed (%d)\n", lfs_err);
+        else
+            RG_LOGI("VFS LittleFS mounted at /vfs\n");
+    }
 
     yfm_enabled = rg_settings_get_number(NS_APP, SETTING_YFM_EMULATION, 1);
     sn76489_enabled = rg_settings_get_number(NS_APP, SETTING_SN76489_EMULATION, 0);
