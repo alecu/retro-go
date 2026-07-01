@@ -257,6 +257,11 @@ void nes_main(void)
 
     rg_system_set_tick_rate(nes->refresh_rate);
 
+    // Ventilastation: render every frame to the POV strip. The NES runs at ~45%
+    // CPU on the S3, so there is plenty of headroom, and the auto-frameskipper
+    // otherwise floors at 1 (halving the POV update rate). SMS already does this.
+    app->frameskip = 0;
+
     int skipFrames = 0;
 
     while (true)
