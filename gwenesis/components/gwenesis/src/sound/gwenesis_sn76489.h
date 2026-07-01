@@ -55,6 +55,7 @@ typedef struct
 extern int16 gwenesis_sn76489_buffer[];
 extern int sn76489_index;
 extern int sn76489_clock;
+extern int sn76489_skip_synthesis; // Ventilastation: skip PSG PCM synthesis
 
 /* Function prototypes */
 void gwenesis_SN76489_Init( int PSGClockValue, int SamplingRate,int freq_divisor);

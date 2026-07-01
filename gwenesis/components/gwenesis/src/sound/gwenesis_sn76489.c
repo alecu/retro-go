@@ -213,7 +213,11 @@ if ( sn76489_clock >= target) return;
   int sn76489_prev_index = sn76489_index;
   sn76489_index += (target-sn76489_clock) / gwenesis_SN76489.divisor;
   if (sn76489_index > sn76489_prev_index) {
-    gwenesis_SN76489_Update(gwenesis_sn76489_buffer + sn76489_prev_index, sn76489_index-sn76489_prev_index);
+    // Ventilastation: the host synthesizes the PSG from the streamed register
+    // writes, so skip the on-device synthesis (the PSG has no readable state the
+    // game depends on). Still advance the clock/index for write timing.
+    if (!sn76489_skip_synthesis)
+      gwenesis_SN76489_Update(gwenesis_sn76489_buffer + sn76489_prev_index, sn76489_index-sn76489_prev_index);
     sn76489_clock = sn76489_index*gwenesis_SN76489.divisor;
   } else {
     sn76489_index = sn76489_prev_index;

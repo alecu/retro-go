@@ -2019,6 +2019,29 @@ static inline void YM2612Update(int16_t *buffer, int length)
   int i;
   int lt;
 
+  // Ventilastation: the board streams register writes to the host, which
+  // synthesizes the audio, so skip the expensive per-sample FM synthesis here.
+  // Only the timers must keep running (the sound driver polls Timer A/B status
+  // to pace music), which is cheap. See ym2612_skip_synthesis.
+  if (ym2612_skip_synthesis)
+  {
+    for (i = 0; i < length; i++)
+    {
+      ym2612.OPN.SL3.key_csm <<= 1;
+      INTERNAL_TIMER_A();
+      if (ym2612.OPN.SL3.key_csm & 2)
+      {
+        FM_KEYOFF_CSM(&ym2612.CH[2], SLOT1);
+        FM_KEYOFF_CSM(&ym2612.CH[2], SLOT2);
+        FM_KEYOFF_CSM(&ym2612.CH[2], SLOT3);
+        FM_KEYOFF_CSM(&ym2612.CH[2], SLOT4);
+        ym2612.OPN.SL3.key_csm = 0;
+      }
+    }
+    INTERNAL_TIMER_B(length);
+    return;
+  }
+
   /* refresh PG increments and EG rates if required */
   refresh_fc_eg_chan(&ym2612.CH[0]);
   refresh_fc_eg_chan(&ym2612.CH[1]);

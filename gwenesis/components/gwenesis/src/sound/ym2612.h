@@ -19,6 +19,7 @@
 extern int16_t gwenesis_ym2612_buffer[];
 extern int ym2612_index;
 extern int ym2612_clock;
+extern int ym2612_skip_synthesis; // Ventilastation: skip PCM synth, keep timers
 
 extern void YM2612Init(void);
 extern void YM2612Config(unsigned char dac_bits); //,unsigned int AUDIO_FREQ_DIVISOR);

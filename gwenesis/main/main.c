@@ -8,6 +8,7 @@
 
 #include <gwenesis.h>
 #include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
+#include "drivers/display/ventilastation_pov.h" // rg_vs_pov_set_tcp_bridge
 
 #define AUDIO_SAMPLE_RATE (53267)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
@@ -23,6 +24,14 @@ int sn76489_clock;
 int16_t gwenesis_ym2612_buffer[AUDIO_BUFFER_LENGTH];
 int ym2612_index;
 int ym2612_clock;
+
+// Ventilastation: skip the on-device FM/PSG PCM synthesis. The board streams the
+// chip register writes to the host, which regenerates the audio, so the samples
+// generated here would only be discarded by the dummy sink. The chips still
+// advance their sample-index counters (for write timing) and, for the YM2612,
+// their timers (so the sound driver keeps triggering). Set at startup.
+int ym2612_skip_synthesis;
+int sn76489_skip_synthesis;
 
 static FILE *savestate_fp = NULL;
 static int savestate_errors = 0;
@@ -311,6 +320,16 @@ void app_main(void)
 
     // Ventilastation: announce to the host so it resets its YM2612+SN76489 synth.
     emu_audio_begin("genesis");
+
+    // Start the POV display task in hardware LED mode (drives the spinning strip
+    // over SPI). Without this the task blocks waiting for the mode and no LEDs
+    // light up. prboom-go does the same; NULLs = no TCP frame bridge.
+    rg_vs_pov_set_tcp_bridge(NULL, NULL);
+
+    // We only stream chip register writes to the host; don't waste CPU
+    // synthesizing PCM that the dummy sink would discard.
+    ym2612_skip_synthesis = 1;
+    sn76489_skip_synthesis = 1;
 
     extern unsigned char gwenesis_vdp_regs[0x20];
     extern unsigned int gwenesis_vdp_status;
