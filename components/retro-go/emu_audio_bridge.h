@@ -30,9 +30,13 @@
 //   Genesis YM2612 bus write (a = 0..3): op = 0x00..0x03
 //   Genesis SN76489 byte:                op = EMU_OP_SN76489
 //   NES APU (addr 0x4000..0x401f):        op = EMU_OP_NES_BASE | (addr & 0x1f)
+//   SMS/GG PSG byte:                     op = EMU_OP_SMS_PSG
+//   SMS/GG stereo byte:                  op = EMU_OP_SMS_GGSTEREO
 #define EMU_OP_YM2612_BASE 0x00
 #define EMU_OP_SN76489     0x04
 #define EMU_OP_NES_BASE    0x20  // 0x20..0x3f
+#define EMU_OP_SMS_PSG     0x40
+#define EMU_OP_SMS_GGSTEREO 0x41
 
 // Announce the running emulator to the host and bring up the UART link.
 // `system` is a short token: "genesis", "nes", "lynx".

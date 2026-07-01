@@ -23,12 +23,27 @@
  ******************************************************************************/
 
 #include "shared.h"
+#include "emu_audio_bridge.h"
 
 snd_t snd;
 // static int16 **fm_buffer;
 static int16 **psg_buffer;
 static int lines_per_frame;
 static int samples_per_line;
+
+static uint16_t emu_audio_sms_sample_idx(void)
+{
+  int line_samples = (vdp.line == lines_per_frame - 1) ? (snd.sample_count - snd.done_so_far) : samples_per_line;
+  int line_cycles = z80_get_elapsed_cycles() % CYCLES_PER_LINE;
+  int sample_idx = snd.done_so_far + (line_cycles * line_samples) / CYCLES_PER_LINE;
+
+  if (sample_idx < 0)
+    sample_idx = 0;
+  else if (sample_idx > snd.sample_count)
+    sample_idx = snd.sample_count;
+
+  return (uint16_t)sample_idx;
+}
 
 
 int sound_init(void)
@@ -252,6 +267,7 @@ void sound_mixer_callback(int16 **stream, int16 **output, int length)
 void psg_stereo_w(int data)
 {
   if(!snd.enabled) return;
+  emu_audio_write(EMU_OP_SMS_GGSTEREO, (uint8_t)(data & 0xFF), emu_audio_sms_sample_idx());
   SN76489_GGStereoWrite(0, data);
 }
 
@@ -263,6 +279,7 @@ void stream_update(int which, int position)
 void psg_write(int data)
 {
   if(!snd.enabled) return;
+  emu_audio_write(EMU_OP_SMS_PSG, (uint8_t)(data & 0xFF), emu_audio_sms_sample_idx());
   SN76489_Write(0, data);
 }
 
