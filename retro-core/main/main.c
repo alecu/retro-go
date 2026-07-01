@@ -4,6 +4,7 @@
 #include <nvs_flash.h>
 #include <esp_littlefs.h>
 #include "drivers/display/ventilastation_pov.h"
+#include "vs_host_bridge.h"
 
 
 void app_main(void)
@@ -25,9 +26,15 @@ void app_main(void)
             RG_LOGW("VFS LittleFS mount failed (%d)\n", lfs_err);
     }
 
+    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
+#if RG_VS_ENABLE_TCP_BRIDGE
+    vs_host_bridge_init();
+    rg_vs_pov_set_tcp_bridge(vs_host_bridge_send, vs_host_bridge_connected);
+#else
     // Start the POV display task in hardware LED mode (drives the spinning strip
     // over SPI). Without this the task blocks and no LEDs light up.
     rg_vs_pov_set_tcp_bridge(NULL, NULL);
+#endif
 
     // The retro-go launcher is disabled at the POV display's resolution, so we
     // are booted directly from MicroPython with no bootArgs. Read which system

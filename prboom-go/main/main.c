@@ -275,34 +275,12 @@ void I_SetMusicVolume(int volume)
 {
 }
 
-// Host input byte bit positions → RG key masks. The desktop emulator (TCP) and
-// the hardware base-station (serial) both send the same one-byte bitmask.
-// bit0=left, bit1=right, bit2=up, bit3=down, bit4=fire/A, bit5=B, bit6=start, bit7=menu/esc
-static const uint32_t emu_bit_to_rg_key[8] = {
-    RG_KEY_LEFT, RG_KEY_RIGHT, RG_KEY_UP, RG_KEY_DOWN,
-    RG_KEY_A, RG_KEY_B, RG_KEY_START, RG_KEY_MENU,
-};
-
 void I_StartTic(void)
 {
     static int64_t last_time = 0;
     static int32_t prev_joystick = 0x0000;
     static int32_t rg_menu_delay = 0;
     uint32_t joystick = rg_input_read_gamepad();
-
-    // Merge host button input (TCP emulator or serial hardware host). The host
-    // sends a byte only when the button state changes, so latch the most recent
-    // value and re-apply it every tick — otherwise a held button would read as
-    // released on the very next tick. Drain any backlog, keeping the latest state.
-    static int host_buttons = 0;
-    int host_byte;
-    while ((host_byte = host_recv_input()) >= 0)
-        host_buttons = host_byte;
-    for (int bit = 0; bit < 8; bit++)
-    {
-        if (host_buttons & (1 << bit))
-            joystick |= emu_bit_to_rg_key[bit];
-    }
 
     uint32_t changed = prev_joystick ^ joystick;
     event_t event = {0};
@@ -470,7 +448,7 @@ void app_main()
 #if RG_VS_ENABLE_TCP_BRIDGE
     // Development: register callbacks so the POV driver forwards frames and palette
     // to the desktop pyglet emulator over the TCP bridge.
-    rg_vs_pov_set_tcp_bridge(wb_send, wb_connected);
+    rg_vs_pov_set_tcp_bridge(host_send, host_connected);
 #else
     // Hardware: no display bridge — the POV driver drives the spinning LED strip
     // over SPI. Still call this (with NULLs) so the display task starts.

@@ -8,16 +8,9 @@
 // Both transports use the same "line\n" + data framing. The display path is
 // independent (TCP frames vs SPI LED strip).
 
-#include "rg_system.h" // RG_VS_ENABLE_TCP_BRIDGE (from the target config.h)
-#include "wifi_bridge.h"
-#include "serial_bridge.h"
+#include "vs_host_bridge.h"
 
-#if RG_VS_ENABLE_TCP_BRIDGE
-#define host_init        wb_init
-#define host_send        wb_send
-#define host_recv_input  wb_recv_input
-#else
-#define host_init        sb_init
-#define host_send        sb_send
-#define host_recv_input  sb_recv_input
-#endif
+#define host_init        vs_host_bridge_init
+#define host_send        vs_host_bridge_send
+#define host_recv_input  vs_host_bridge_recv_input
+#define host_connected   vs_host_bridge_connected

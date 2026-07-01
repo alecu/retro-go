@@ -1,5 +1,6 @@
 #include "rg_system.h"
 #include "rg_input.h"
+#include "vs_host_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,10 @@ static rg_keymap_kbd_t keymap_kbd[] = RG_GAMEPAD_KBD_MAP;
 #endif
 #ifdef RG_GAMEPAD_SERIAL_MAP
 static rg_keymap_serial_t keymap_serial[] = RG_GAMEPAD_SERIAL_MAP;
+#endif
+#ifdef RG_GAMEPAD_HOST_MAP
+static rg_keymap_host_t keymap_host[] = RG_GAMEPAD_HOST_MAP;
+static uint8_t host_buttons = 0;
 #endif
 #ifdef RG_GAMEPAD_VIRT_MAP
 static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
@@ -199,6 +204,20 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
     }
 #endif
 
+#if defined(RG_GAMEPAD_HOST_MAP)
+    int latest_buttons;
+    while ((latest_buttons = vs_host_bridge_recv_input()) >= 0)
+        host_buttons = (uint8_t)latest_buttons;
+    if (!vs_host_bridge_connected())
+        host_buttons = 0;
+    for (size_t i = 0; i < RG_COUNT(keymap_host); ++i)
+    {
+        const rg_keymap_host_t *mapping = &keymap_host[i];
+        if (host_buttons & mapping->mask)
+            state |= mapping->key;
+    }
+#endif
+
 #if defined(RG_GAMEPAD_VIRT_MAP)
     for (size_t i = 0; i < RG_COUNT(keymap_virt); ++i)
     {
@@ -332,6 +351,17 @@ void rg_input_init(void)
     gpio_set_level(RG_GPIO_GAMEPAD_LATCH, 0);
     gpio_set_level(RG_GPIO_GAMEPAD_CLOCK, 1);
     UPDATE_GLOBAL_MAP(keymap_serial);
+#endif
+
+#if defined(RG_GAMEPAD_HOST_MAP)
+    RG_LOGI("Initializing HOST gamepad driver...");
+    host_buttons = 0;
+    vs_host_bridge_init();
+    UPDATE_GLOBAL_MAP(keymap_host);
+#endif
+
+#if defined(RG_GAMEPAD_VIRT_MAP)
+    UPDATE_GLOBAL_MAP(keymap_virt);
 #endif
 
 

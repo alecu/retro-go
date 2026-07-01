@@ -9,6 +9,7 @@
 #include <gwenesis.h>
 #include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
 #include "drivers/display/ventilastation_pov.h" // rg_vs_pov_set_tcp_bridge
+#include "vs_host_bridge.h"
 
 #define AUDIO_SAMPLE_RATE (53267)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
@@ -321,10 +322,16 @@ void app_main(void)
     // Ventilastation: announce to the host so it resets its YM2612+SN76489 synth.
     emu_audio_begin("genesis");
 
+    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
+#if RG_VS_ENABLE_TCP_BRIDGE
+    vs_host_bridge_init();
+    rg_vs_pov_set_tcp_bridge(vs_host_bridge_send, vs_host_bridge_connected);
+#else
     // Start the POV display task in hardware LED mode (drives the spinning strip
     // over SPI). Without this the task blocks waiting for the mode and no LEDs
-    // light up. prboom-go does the same; NULLs = no TCP frame bridge.
+    // light up.
     rg_vs_pov_set_tcp_bridge(NULL, NULL);
+#endif
 
     // We only stream chip register writes to the host; don't waste CPU
     // synthesizing PCM that the dummy sink would discard.

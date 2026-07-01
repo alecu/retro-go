@@ -52,15 +52,32 @@
     ILI9341_CMD(0xE1, 0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F);
 
 
-// Input: no physical buttons — all input comes from the WiFi TCP bridge (wifi_bridge.c)
+// Input: no physical buttons — all input comes from the host bridge
+// (UART on hardware, TCP in emulator mode).
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
 
 // # ADC_1_5 = GPIO6 (joystick Y — not populated)
 // # ADC_1_6 = GPIO7 (joystick X — not populated)
 // Floating ADC pins produce garbage readings, so the ADC map is disabled.
 
-// #define RG_GAMEPAD_ADC_MAP { ... }  -- disabled: no joystick hardware
-// #define RG_GAMEPAD_GPIO_MAP { ... } -- disabled: no button hardware
+// Host byte bits match MicroPython's Director constants:
+// left, right, up, down, A, B, C, D = 1,2,4,8,16,32,64,128.
+// Map C/D to Select/Start so the standard Retro-Go console cores get the full
+// 8-way + 4-button layout they expect, then recover Menu/Option with combos.
+#define RG_GAMEPAD_HOST_MAP {\
+    {RG_KEY_LEFT,   .mask = (1 << 0)},\
+    {RG_KEY_RIGHT,  .mask = (1 << 1)},\
+    {RG_KEY_UP,     .mask = (1 << 2)},\
+    {RG_KEY_DOWN,   .mask = (1 << 3)},\
+    {RG_KEY_A,      .mask = (1 << 4)},\
+    {RG_KEY_B,      .mask = (1 << 5)},\
+    {RG_KEY_SELECT, .mask = (1 << 6)},\
+    {RG_KEY_START,  .mask = (1 << 7)},\
+}
+#define RG_GAMEPAD_VIRT_MAP {\
+    {RG_KEY_MENU,   .src = RG_KEY_START | RG_KEY_SELECT},\
+    {RG_KEY_OPTION, .src = RG_KEY_SELECT | RG_KEY_A    },\
+}
 
 
 // Battery
