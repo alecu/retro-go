@@ -222,10 +222,15 @@ static void spi_start_buses(void) {
     ret = spi_bus_initialize(RG_VS_LED_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
     RG_ASSERT(ret == ESP_OK || ret == ESP_ERR_INVALID_STATE, "spi_bus_initialize failed.");
 
+    // RG_VS_LED_CS drives a real chip-select for the hardware workbench SPI slave.
+    // Falls back to -1 (no CS) on targets that don't define it (e.g. devkit with LCD).
+#ifndef RG_VS_LED_CS
+#define RG_VS_LED_CS -1
+#endif
     const spi_device_interface_config_t devcfg = {
         .clock_speed_hz = SPI_MASTER_FREQ_20M,
         .mode = 0,
-        .spics_io_num = -1,
+        .spics_io_num = RG_VS_LED_CS,
         .queue_size = 2,
     };
     ret = spi_bus_add_device(RG_VS_LED_SPI_HOST, &devcfg, &spi_handle);

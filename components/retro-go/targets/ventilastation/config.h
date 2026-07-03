@@ -98,6 +98,9 @@
 #define RG_VS_LED_SPI_HOST          SPI2_HOST
 #define RG_VS_LED_MOSI              GPIO_NUM_16
 #define RG_VS_LED_CLK               GPIO_NUM_15
+// CS driven low for each 444-byte burst so the hardware workbench SPI slave
+// can frame transactions. APA102 strips ignore CS; GPIO17 is free in this config.
+#define RG_VS_LED_CS                GPIO_NUM_17
 
 // POV output mode: 0 = drive the spinning LED strip over SPI (real hardware),
 // 1 = stream frames to the desktop pyglet emulator over TCP/WiFi (development).
