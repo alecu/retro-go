@@ -74,7 +74,7 @@ typedef struct
 typedef struct
 {
     rg_key_t key;
-    uint8_t mask; // bit mask in the most recently received host byte
+    uint32_t mask; // bit mask in the most recently received host state (joy1 bits 0-7; joy2/extra reserved for bits 8+)
 } rg_keymap_host_t;
 
 // #define RG_GAMEPAD_VIRT_MAP {{}, ...} to add virtual buttons (eg start+select = menu)

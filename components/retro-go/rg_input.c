@@ -205,11 +205,19 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
 #endif
 
 #if defined(RG_GAMEPAD_HOST_MAP)
-    int latest_buttons;
-    while ((latest_buttons = vs_host_bridge_recv_input()) >= 0)
-        host_buttons = (uint8_t)latest_buttons;
+    int latest_buttons = vs_host_bridge_recv_input();
     if (!vs_host_bridge_connected())
+    {
         host_buttons = 0;
+    }
+    else
+    {
+        if (latest_buttons >= 0)
+            host_buttons = (uint8_t)latest_buttons;
+        // BUTTON_D travels as extra bit 0 in protocol v2, not on the wire
+        // byte itself -- mirror it into bit 7 so RG_KEY_START keeps working.
+        host_buttons = (host_buttons & 0x7F) | ((vs_host_bridge_get_extra() & 0x01) << 7);
+    }
     for (size_t i = 0; i < RG_COUNT(keymap_host); ++i)
     {
         const rg_keymap_host_t *mapping = &keymap_host[i];

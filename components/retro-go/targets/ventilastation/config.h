@@ -64,6 +64,9 @@
 // left, right, up, down, A, B, C, D = 1,2,4,8,16,32,64,128.
 // Map C/D to Select/Start so the standard Retro-Go console cores get the full
 // 8-way + 4-button layout they expect, then recover Menu/Option with combos.
+// Bit 7 (D/Start) is not a live wire bit under input protocol v2 -- it's
+// mirrored by rg_input.c from "extra" bit 0 of the joystick frame (see
+// docs/input-protocol-v2.md) so this map is unchanged.
 #define RG_GAMEPAD_HOST_MAP {\
     {RG_KEY_LEFT,   .mask = (1 << 0)},\
     {RG_KEY_RIGHT,  .mask = (1 << 1)},\
