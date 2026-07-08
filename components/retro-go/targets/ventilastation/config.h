@@ -94,13 +94,13 @@
 
 // Ventilastation POV display
 #define RG_VS_ENABLE_POV_DISPLAY    1
-#define RG_VS_HALL_GPIO             GPIO_NUM_6
+#define RG_VS_HALL_GPIO             GPIO_NUM_7
 #define RG_VS_LED_SPI_HOST          SPI2_HOST
-#define RG_VS_LED_MOSI              GPIO_NUM_16
-#define RG_VS_LED_CLK               GPIO_NUM_15
+#define RG_VS_LED_MOSI              GPIO_NUM_13
+#define RG_VS_LED_CLK               GPIO_NUM_12
 // CS driven low for each 444-byte burst so the hardware workbench SPI slave
 // can frame transactions. APA102 strips ignore CS; GPIO17 is free in this config.
-#define RG_VS_LED_CS                GPIO_NUM_17
+#define RG_VS_LED_CS                GPIO_NUM_14
 
 // POV output mode: 0 = drive the spinning LED strip over SPI (real hardware),
 // 1 = stream frames to the desktop pyglet emulator over TCP/WiFi (development).
@@ -114,8 +114,8 @@
 // — matching the MicroPython serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9,
 // 115200 8N1, the machine.UART default). Unused in TCP/emulator mode.
 #define RG_VS_SERIAL_UART_NUM       2
-#define RG_VS_SERIAL_TX             GPIO_NUM_10
-#define RG_VS_SERIAL_RX             GPIO_NUM_9
+#define RG_VS_SERIAL_TX             GPIO_NUM_5
+#define RG_VS_SERIAL_RX             GPIO_NUM_6
 #define RG_VS_SERIAL_BAUD           115200
 
 // SPI Display (back up working)
@@ -125,8 +125,7 @@
 #define RG_GPIO_LCD_CS              GPIO_NUM_8
 #define RG_GPIO_LCD_DC              GPIO_NUM_15
 #define RG_GPIO_LCD_BCKL            GPIO_NUM_NC
-#define RG_GPIO_LCD_RST             GPIO_NUM_5
-
+#define RG_GPIO_LCD_RST             GPIO_NUM_NC
 #define RG_GPIO_SDSPI_MISO          GPIO_NUM_13
 #define RG_GPIO_SDSPI_MOSI          GPIO_NUM_11
 #define RG_GPIO_SDSPI_CLK           GPIO_NUM_12
