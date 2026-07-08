@@ -56,11 +56,16 @@
 // (UART on hardware, TCP in emulator mode).
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
 
-// rg_input's polling task defaults to core 1, sharing priority 6 with
-// vs_display_task (the LED SPI loop, ventilastation_pov.c). Move it to core 0
-// (with the game loop, which is what actually consumes this task's output)
-// so it can't preempt the timing-critical SPI loop.
-#define RG_GAMEPAD_TASK_AFFINITY 0
+// Core 1 is reserved for vs_display_task (the LED SPI loop,
+// ventilastation_pov.c), which is timing-critical: gpu_step() derives the
+// current column from wall-clock time, so any delay in scheduling it shows up
+// as a visible glitch on the spinning display. Move every other task that
+// would otherwise default onto (or float onto) core 1 to core 0 instead,
+// alongside the game loop (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), so core 1 is
+// left exclusively to the SPI loop.
+#define RG_GAMEPAD_TASK_AFFINITY   0 // rg_input's polling task (rg_input.c)
+#define RG_SYSMON_TASK_AFFINITY    0 // periodic stats task (rg_system.c), otherwise tskNO_AFFINITY
+#define RG_PCE_AUDIO_TASK_AFFINITY 0 // PC Engine sound task (retro-core/main/main_pce.c)
 
 // # ADC_1_5 = GPIO6 (joystick Y — not populated)
 // # ADC_1_6 = GPIO7 (joystick X — not populated)

@@ -12,6 +12,14 @@
 #undef AUDIO_SAMPLE_RATE
 #define AUDIO_SAMPLE_RATE 22050
 
+// Core affinity for the PCE sound task below. Defaults to 1 (original
+// behavior, unchanged for every other target); Ventilastation overrides this
+// to 0 because core 1 is reserved for vs_display_task (the LED SPI loop,
+// ventilastation_pov.c), which shares priority with nothing else there.
+#ifndef RG_PCE_AUDIO_TASK_AFFINITY
+#define RG_PCE_AUDIO_TASK_AFFINITY 1
+#endif
+
 static bool emulationPaused = false; // This should probably be a mutex
 static int overscan = false;
 static int skipFrames = 0;
@@ -220,7 +228,7 @@ void pce_main(void)
     free(palette);
 
     emulationPaused = true;
-    rg_task_create("pce_sound", &audioTask, NULL, 2 * 1024, RG_TASK_PRIORITY_2, 1);
+    rg_task_create("pce_sound", &audioTask, NULL, 2 * 1024, RG_TASK_PRIORITY_2, RG_PCE_AUDIO_TASK_AFFINITY);
 
     InitPCE(app->sampleRate, true);
 
