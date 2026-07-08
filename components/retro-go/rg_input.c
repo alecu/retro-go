@@ -16,6 +16,15 @@
 #include <SDL2/SDL.h>
 #endif
 
+// Core affinity for the background polling task below. Defaults to 1 (original
+// behavior, unchanged for every other target); Ventilastation overrides this to
+// 0 because rg_input shares priority 6 with vs_display_task (the LED SPI loop,
+// ventilastation_pov.c) on core 1, and being timing-critical, that task should
+// not have to share its core with input polling.
+#ifndef RG_GAMEPAD_TASK_AFFINITY
+#define RG_GAMEPAD_TASK_AFFINITY 1
+#endif
+
 #if RG_BATTERY_DRIVER == 1
 #include <esp_adc_cal.h>
 static esp_adc_cal_characteristics_t adc_chars;
@@ -396,7 +405,7 @@ void rg_input_init(void)
     rg_input_read_gamepad_raw(NULL);
 
     // Start background polling
-    rg_task_create("rg_input", &input_task, NULL, 3 * 1024, RG_TASK_PRIORITY_6, 1);
+    rg_task_create("rg_input", &input_task, NULL, 3 * 1024, RG_TASK_PRIORITY_6, RG_GAMEPAD_TASK_AFFINITY);
     while (gamepad_state == -1)
         rg_task_yield();
     RG_LOGI("Input ready. state=" PRINTF_BINARY_16 "\n", PRINTF_BINVAL_16(gamepad_state));

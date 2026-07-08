@@ -56,6 +56,12 @@
 // (UART on hardware, TCP in emulator mode).
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
 
+// rg_input's polling task defaults to core 1, sharing priority 6 with
+// vs_display_task (the LED SPI loop, ventilastation_pov.c). Move it to core 0
+// (with the game loop, which is what actually consumes this task's output)
+// so it can't preempt the timing-critical SPI loop.
+#define RG_GAMEPAD_TASK_AFFINITY 0
+
 // # ADC_1_5 = GPIO6 (joystick Y — not populated)
 // # ADC_1_6 = GPIO7 (joystick X — not populated)
 // Floating ADC pins produce garbage readings, so the ADC map is disabled.
