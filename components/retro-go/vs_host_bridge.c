@@ -20,7 +20,7 @@
 // Shared by both the TCP and UART transports below. Mirrors
 // apps/micropython/ventilastation/input_parser.py: joystick frames
 // ('*' + 3 data bytes) and command lines (alnum-prefixed, '\n'-terminated)
-// share the same byte stream (see docs/input-protocol-v2.md).
+// share the same byte stream (see docs/internals/input-protocol-v2.md in vsdk).
 typedef enum
 {
     VS_SCAN,
