@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// UART host link for hardware (LED+SPI) mode. Mirrors the wifi_bridge API but
+// UART host link for hardware (LED+SPI) mode. Mirrors the vs_host_bridge API but
 // over UART2, talking to the base-station host the same way MicroPython does in
 // ventilastation/serialcomms.py (same pins/baud, same "line\n" + data framing).
 void sb_init(void);
