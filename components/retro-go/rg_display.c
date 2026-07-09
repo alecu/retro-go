@@ -1,13 +1,24 @@
 #include "rg_system.h"
 #include "rg_display.h"
+#include "drivers/display/ventilastation_pov.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 #define LCD_BUFFER_LENGTH (RG_SCREEN_WIDTH * 4) // In pixels
 
+// No physical LCD wired up (dummy driver): the rg_display FreeRTOS task and its
+// per-frame queue handoff would just burn a same-core, same-priority timeslice
+// against vs_display's LED SPI loop (see ventilastation_pov.c) for no visible
+// benefit. Skip creating it entirely on those targets. Targets with a real LCD
+// (RG_SCREEN_DRIVER 0/1/99) keep the task, even if POV is also enabled
+// (eg. esp32s3-devkit-c, which drives both for bench testing).
+#define RG_DISPLAY_HAS_LCD (RG_SCREEN_DRIVER == 0 || RG_SCREEN_DRIVER == 1 || RG_SCREEN_DRIVER == 99)
+
 // static rg_display_driver_t driver;
+#if RG_DISPLAY_HAS_LCD
 static rg_task_t *display_task_queue;
+#endif
 static rg_display_counters_t counters;
 static rg_display_config_t config;
 static rg_surface_t *border;
@@ -96,6 +107,11 @@ static inline unsigned blend_pixels(unsigned a, unsigned b)
 
 static inline void write_update(const rg_surface_t *update)
 {
+#if !RG_DISPLAY_HAS_LCD
+    (void)update;
+    return;
+#endif
+
     const int64_t time_start = rg_system_timer();
 
     bool filter_x = display.viewport.filter_x;
@@ -503,7 +519,11 @@ void rg_display_submit(const rg_surface_t *update, uint32_t flags)
         display.changed = true;
     }
 
+    rg_vs_pov_submit_surface(update);
+
+#if RG_DISPLAY_HAS_LCD
     rg_task_send(display_task_queue, &(rg_task_msg_t){.dataPtr = update});
+#endif
 
     counters.blockTime += rg_system_timer() - time_start;
     counters.totalFrames++;
@@ -511,9 +531,14 @@ void rg_display_submit(const rg_surface_t *update, uint32_t flags)
 
 bool rg_display_sync(bool block)
 {
+#if RG_DISPLAY_HAS_LCD
     while (block && rg_task_messages_waiting(display_task_queue))
         continue; // We should probably yield?
     return !rg_task_messages_waiting(display_task_queue);
+#else
+    (void)block;
+    return true; // No LCD task draining frames, nothing to wait for.
+#endif
 }
 
 void rg_display_write_rect(int left, int top, int width, int height, int stride, const uint16_t *buffer, uint32_t flags)
@@ -614,7 +639,9 @@ void rg_display_clear(uint16_t color_le)
 
 void rg_display_deinit(void)
 {
+#if RG_DISPLAY_HAS_LCD
     rg_task_send(display_task_queue, &(rg_task_msg_t){.type = RG_TASK_MSG_STOP});
+#endif
     // lcd_set_backlight(0);
     lcd_deinit();
     RG_LOGI("Display terminated.\n");
@@ -646,8 +673,11 @@ void rg_display_init(void)
     rg_display_clear(C_BLACK);
     rg_task_delay(80); // Wait for the screen be cleared before turning on the backlight (40ms doesn't seem to be enough...)
     lcd_set_backlight(config.backlight);
+#if RG_DISPLAY_HAS_LCD
     display_task_queue = rg_task_create("rg_display", &display_task, NULL, 4 * 1024, RG_TASK_PRIORITY_6, 1);
+#endif
     if (config.border_file)
         load_border_file(config.border_file);
+    rg_vs_pov_init();
     RG_LOGI("Display ready.\n");
 }

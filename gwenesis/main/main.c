@@ -2,7 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_littlefs.h>
+
 #include <gwenesis.h>
+#include "emu_audio_bridge.h" // Ventilastation: stream chip writes to the host
 
 #define AUDIO_SAMPLE_RATE (53267)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
@@ -18,6 +23,14 @@ int sn76489_clock;
 int16_t gwenesis_ym2612_buffer[AUDIO_BUFFER_LENGTH];
 int ym2612_index;
 int ym2612_clock;
+
+// Ventilastation: skip the on-device FM/PSG PCM synthesis. The board streams the
+// chip register writes to the host, which regenerates the audio, so the samples
+// generated here would only be discarded by the dummy sink. The chips still
+// advance their sample-index counters (for write timing) and, for the YM2612,
+// their timers (so the sound driver keeps triggering). Set at startup.
+int ym2612_skip_synthesis;
+int sn76489_skip_synthesis;
 
 static FILE *savestate_fp = NULL;
 static int savestate_errors = 0;
@@ -210,6 +223,24 @@ void app_main(void)
 
     app = rg_system_init(AUDIO_SAMPLE_RATE / 2, &handlers, NULL);
 
+    // Ventilastation: mount the shared LittleFS data partition at /vfs (the
+    // default rg_storage init mounts FAT, which this partition is not, so the
+    // launcher and prboom-go do the same). Without this, ROMs under
+    // RG_STORAGE_ROOT ("/vfs") cannot be opened.
+    {
+        esp_vfs_littlefs_conf_t lfs_conf = {
+            .base_path = "/vfs",
+            .partition_label = "vfs",
+            .format_if_mount_failed = false,
+            .read_only = false,
+        };
+        esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+        if (lfs_err != ESP_OK)
+            RG_LOGW("VFS LittleFS mount failed (%d)\n", lfs_err);
+        else
+            RG_LOGI("VFS LittleFS mounted at /vfs\n");
+    }
+
     yfm_enabled = rg_settings_get_number(NS_APP, SETTING_YFM_EMULATION, 1);
     sn76489_enabled = rg_settings_get_number(NS_APP, SETTING_SN76489_EMULATION, 0);
     z80_enabled = rg_settings_get_number(NS_APP, SETTING_Z80_EMULATION, 1);
@@ -227,6 +258,33 @@ void app_main(void)
     VRAM = rg_alloc(VRAM_MAX_SIZE, MEM_FAST);
 
     RG_LOGI("Genesis start\n");
+
+    // Ventilastation: when launched standalone from MicroPython (no retro-go
+    // launcher), there are no bootArgs, so the ROM path is handed to us via NVS
+    // (namespace "voom_md", key "rom", a UTF-8 blob without a NUL terminator).
+    static char vs_rom_path[256];
+    if (!app->romPath || app->romPath[0] == '\0')
+    {
+        esp_err_t err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            err = nvs_flash_init();
+        }
+        if (err == ESP_OK) {
+            nvs_handle_t h;
+            if (nvs_open("voom_md", NVS_READONLY, &h) == ESP_OK) {
+                size_t len = sizeof(vs_rom_path) - 1;
+                if (nvs_get_blob(h, "rom", vs_rom_path, &len) == ESP_OK) {
+                    vs_rom_path[len] = '\0';
+                    app->romPath = vs_rom_path;
+                    RG_LOGI("Genesis: ROM from NVS voom_md/rom = %s\n", vs_rom_path);
+                }
+                nvs_close(h);
+            }
+        }
+    }
+    if (!app->romPath || app->romPath[0] == '\0')
+        RG_PANIC("No ROM path (set NVS voom_md/rom)");
 
     size_t rom_size;
     void *rom_data;
@@ -258,6 +316,14 @@ void app_main(void)
 
     rg_system_set_tick_rate(60);
     app->frameskip = 3;
+
+    // Ventilastation: announce to the host so it resets its YM2612+SN76489 synth.
+    emu_audio_begin("genesis");
+
+    // We only stream chip register writes to the host; don't waste CPU
+    // synthesizing PCM that the dummy sink would discard.
+    ym2612_skip_synthesis = 1;
+    sn76489_skip_synthesis = 1;
 
     extern unsigned char gwenesis_vdp_regs[0x20];
     extern unsigned int gwenesis_vdp_status;
@@ -316,6 +382,9 @@ void app_main(void)
 
         sn76489_clock = sn76489_enabled ? 0 : 0x1000000;
         sn76489_index = 0;
+
+        // Ventilastation: start capturing this frame's chip register writes.
+        emu_audio_frame_begin();
 
         scan_line = 0;
 
@@ -382,6 +451,11 @@ void app_main(void)
             gwenesis_SN76489_run(system_clock);
             ym2612_run(system_clock);
         }
+
+        // Ventilastation: ship this frame's captured chip writes to the host.
+        // nsamples = the larger of the two chip sample counters (a disabled chip
+        // stays at 0), telling the host exactly how many samples to render.
+        emu_audio_frame_end((uint16_t)(ym2612_index > sn76489_index ? ym2612_index : sn76489_index));
 
         // reset m68k cycles to the begin of next frame cycle
         m68k.cycles -= system_clock;

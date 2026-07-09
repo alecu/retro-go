@@ -1,5 +1,6 @@
 #include "rg_system.h"
 #include "rg_input.h"
+#include "vs_host_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,15 @@
 #define ADC_ATTEN_DB_11 3
 #else
 #include <SDL2/SDL.h>
+#endif
+
+// Core affinity for the background polling task below. Defaults to 1 (original
+// behavior, unchanged for every other target); Ventilastation overrides this to
+// 0 because rg_input shares priority 6 with vs_display_task (the LED SPI loop,
+// ventilastation_pov.c) on core 1, and being timing-critical, that task should
+// not have to share its core with input polling.
+#ifndef RG_GAMEPAD_TASK_AFFINITY
+#define RG_GAMEPAD_TASK_AFFINITY 1
 #endif
 
 #if RG_BATTERY_DRIVER == 1
@@ -34,6 +44,10 @@ static rg_keymap_kbd_t keymap_kbd[] = RG_GAMEPAD_KBD_MAP;
 #endif
 #ifdef RG_GAMEPAD_SERIAL_MAP
 static rg_keymap_serial_t keymap_serial[] = RG_GAMEPAD_SERIAL_MAP;
+#endif
+#ifdef RG_GAMEPAD_HOST_MAP
+static rg_keymap_host_t keymap_host[] = RG_GAMEPAD_HOST_MAP;
+static uint8_t host_buttons = 0;
 #endif
 #ifdef RG_GAMEPAD_VIRT_MAP
 static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
@@ -199,6 +213,28 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
     }
 #endif
 
+#if defined(RG_GAMEPAD_HOST_MAP)
+    int latest_buttons = vs_host_bridge_recv_input();
+    if (!vs_host_bridge_connected())
+    {
+        host_buttons = 0;
+    }
+    else
+    {
+        if (latest_buttons >= 0)
+            host_buttons = (uint8_t)latest_buttons;
+        // BUTTON_D travels as extra bit 0 in protocol v2, not on the wire
+        // byte itself -- mirror it into bit 7 so RG_KEY_START keeps working.
+        host_buttons = (host_buttons & 0x7F) | ((vs_host_bridge_get_extra() & 0x01) << 7);
+    }
+    for (size_t i = 0; i < RG_COUNT(keymap_host); ++i)
+    {
+        const rg_keymap_host_t *mapping = &keymap_host[i];
+        if (host_buttons & mapping->mask)
+            state |= mapping->key;
+    }
+#endif
+
 #if defined(RG_GAMEPAD_VIRT_MAP)
     for (size_t i = 0; i < RG_COUNT(keymap_virt); ++i)
     {
@@ -334,6 +370,17 @@ void rg_input_init(void)
     UPDATE_GLOBAL_MAP(keymap_serial);
 #endif
 
+#if defined(RG_GAMEPAD_HOST_MAP)
+    RG_LOGI("Initializing HOST gamepad driver...");
+    host_buttons = 0;
+    vs_host_bridge_init();
+    UPDATE_GLOBAL_MAP(keymap_host);
+#endif
+
+#if defined(RG_GAMEPAD_VIRT_MAP)
+    UPDATE_GLOBAL_MAP(keymap_virt);
+#endif
+
 
 #if RG_BATTERY_DRIVER == 1 /* ADC */
     RG_LOGI("Initializing ADC battery driver...");
@@ -358,7 +405,7 @@ void rg_input_init(void)
     rg_input_read_gamepad_raw(NULL);
 
     // Start background polling
-    rg_task_create("rg_input", &input_task, NULL, 3 * 1024, RG_TASK_PRIORITY_6, 1);
+    rg_task_create("rg_input", &input_task, NULL, 3 * 1024, RG_TASK_PRIORITY_6, RG_GAMEPAD_TASK_AFFINITY);
     while (gamepad_state == -1)
         rg_task_yield();
     RG_LOGI("Input ready. state=" PRINTF_BINARY_16 "\n", PRINTF_BINVAL_16(gamepad_state));

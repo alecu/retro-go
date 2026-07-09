@@ -1,6 +1,7 @@
 #include "shared.h"
 
 #include <smsplus.h>
+#include "emu_audio_bridge.h"
 
 static rg_app_t *app;
 static rg_surface_t *updates[2];
@@ -145,6 +146,11 @@ void sms_main(void)
 
     system_poweron();
 
+    // Ventilastation: the SMS, Game Gear, and Coleco paths here all use the
+    // smsplus SN76489 core. Tell the host which master clock to use so its
+    // serial-side synth matches the board's pitch exactly.
+    emu_audio_begin((sms.display == DISPLAY_NTSC) ? "sms-ntsc" : "sms-pal");
+
     updates[0]->offset = bitmap.viewport.x;
     updates[0]->width = bitmap.viewport.w;
     updates[0]->height = bitmap.viewport.h;
@@ -238,7 +244,9 @@ void sms_main(void)
             }
         }
 
+        emu_audio_frame_begin();
         system_frame(!drawFrame);
+        emu_audio_frame_end((uint16_t)snd.sample_count);
 
         if (drawFrame)
         {

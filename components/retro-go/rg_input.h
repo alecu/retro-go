@@ -70,6 +70,13 @@ typedef struct
     int level;  // 0-1
 } rg_keymap_serial_t;
 
+// #define RG_GAMEPAD_HOST_MAP {{}, ...} to use a latched host button byte
+typedef struct
+{
+    rg_key_t key;
+    uint32_t mask; // bit mask in the most recently received host state (joy1 bits 0-7; joy2/extra reserved for bits 8+)
+} rg_keymap_host_t;
+
 // #define RG_GAMEPAD_VIRT_MAP {{}, ...} to add virtual buttons (eg start+select = menu)
 typedef struct
 {

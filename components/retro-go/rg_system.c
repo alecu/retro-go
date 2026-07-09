@@ -24,6 +24,14 @@
 #include <SDL2/SDL_mutex.h>
 #endif
 
+// Core affinity for the periodic stats/monitor task below. Defaults to -1
+// (tskNO_AFFINITY, original behavior); Ventilastation overrides this to 0 so
+// it can never land on core 1, which it shares priority with vs_display_task
+// (the LED SPI loop, ventilastation_pov.c) on that target.
+#ifndef RG_SYSMON_TASK_AFFINITY
+#define RG_SYSMON_TASK_AFFINITY -1
+#endif
+
 #define RG_STRUCT_MAGIC 0x12345678
 #define RG_LOGBUF_SIZE 2048
 typedef struct
@@ -528,7 +536,7 @@ rg_app_t *rg_system_init(int sampleRate, const rg_handlers_t *handlers, void *_u
     if (app.bootFlags & RG_BOOT_ONCE)
         update_boot_config(RG_APP_LAUNCHER, NULL, NULL, 0);
 
-    rg_task_create("rg_sysmon", &system_monitor_task, NULL, 3 * 1024, RG_TASK_PRIORITY_5, -1);
+    rg_task_create("rg_sysmon", &system_monitor_task, NULL, 3 * 1024, RG_TASK_PRIORITY_5, RG_SYSMON_TASK_AFFINITY);
     app.initialized = true;
 
     update_memory_statistics();

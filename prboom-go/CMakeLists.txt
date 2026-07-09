@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
 set(COMPONENTS "main retro-go prboom")
-set(RG_ENABLE_NETWORKING 0)
+set(RG_ENABLE_NETWORKING 1)
 include(../base.cmake)
 project(prboom-go)

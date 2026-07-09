@@ -47,6 +47,13 @@
 #include "w_wad.h"
 #include "lprintf.h"
 
+// Voom host-audio bridge (defined in main/voom_audio_bridge.c). Forwards music
+// triggers to the emulator (TCP) or hardware host (serial) which plays them.
+// Declared extern here to avoid a cross-component include (the same way this
+// file already calls main's I_* functions).
+extern void voom_audio_music(const char *name);
+extern void voom_audio_music_stop(void);
+
 // when to clip out sounds
 // Does not fit the large outdoor areas.
 #define S_CLIPPING_DIST (1200<<FRACBITS)
@@ -479,6 +486,9 @@ void S_ChangeMusic(int musicnum, int looping)
   I_PlaySong(music->handle, looping);
 
   mus_playing = music;
+
+  // Tell the host to play this track too (it loops it; see audio.py).
+  voom_audio_music(music->name);
 }
 
 
@@ -497,6 +507,9 @@ void S_StopMusic(void)
       I_UnRegisterSong(mus_playing->handle);
 
       mus_playing = 0;
+
+      // Tell the host to stop the music too.
+      voom_audio_music_stop();
     }
 }
 

@@ -1,10 +1,14 @@
 // Target definition
-#define RG_TARGET_NAME             "Ventilastation"
+#define RG_TARGET_NAME             "VENTILASTATION"
 
-// Storage
-#define RG_STORAGE_ROOT             "/sd"
-#define RG_STORAGE_SDSPI_HOST       SPI2_HOST
-#define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
+// Return to MicroPython (factory partition) from prboom-go menu
+#define RG_APP_LAUNCHER            "factory"
+#define RG_APP_FACTORY             "factory"
+
+// Storage: no SD card — use the LittleFS VFS partition already mounted at /vfs by prboom-go
+#define RG_STORAGE_ROOT             "/vfs"
+// #define RG_STORAGE_SDSPI_HOST       SPI2_HOST
+// #define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
 // #define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_FLASH_PARTITION  "vfs"
@@ -14,7 +18,11 @@
 #define RG_AUDIO_USE_EXT_DAC        0   // 0 = Disable, 1 = Enable
 
 // Video
-#define RG_SCREEN_DRIVER            0   // 0 = ILI9341/ST7789
+// No LCD: the POV LED strip is the display and owns SPI2 (RG_VS_LED_* share the
+// same bus/pins as the LCD would). Use the dummy driver so the retro-go display
+// task never touches SPI — otherwise, in hardware POV mode, vs_display_task holds
+// the bus and the LCD task panics in spi_take_buffer.
+#define RG_SCREEN_DRIVER            2   // 0 = ILI9341/ST7789, 99 = SDL2, other = dummy (no LCD)
 #define RG_SCREEN_HOST              SPI2_HOST
 #define RG_SCREEN_SPEED             SPI_MASTER_FREQ_40M // SPI_MASTER_FREQ_80M
 #define RG_SCREEN_BACKLIGHT         1
@@ -44,27 +52,45 @@
     ILI9341_CMD(0xE1, 0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F);
 
 
-// Input
+// Input: no physical buttons — all input comes from the host bridge
+// (UART on hardware, TCP in emulator mode).
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
 
-// # ADC_1_5 = GPIO6
-// # ADC_1_6 = GPIO7
+// Core 1 is reserved for vs_display_task (the LED SPI loop,
+// ventilastation_pov.c), which is timing-critical: gpu_step() derives the
+// current column from wall-clock time, so any delay in scheduling it shows up
+// as a visible glitch on the spinning display. Move every other task that
+// would otherwise default onto (or float onto) core 1 to core 0 instead,
+// alongside the game loop (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), so core 1 is
+// left exclusively to the SPI loop.
+#define RG_GAMEPAD_TASK_AFFINITY   0 // rg_input's polling task (rg_input.c)
+#define RG_SYSMON_TASK_AFFINITY    0 // periodic stats task (rg_system.c), otherwise tskNO_AFFINITY
+#define RG_PCE_AUDIO_TASK_AFFINITY 0 // PC Engine sound task (retro-core/main/main_pce.c)
 
+// # ADC_1_5 = GPIO6 (joystick Y — not populated)
+// # ADC_1_6 = GPIO7 (joystick X — not populated)
+// Floating ADC pins produce garbage readings, so the ADC map is disabled.
 
-
-#define RG_GAMEPAD_ADC_MAP {\
-    {RG_KEY_UP,    ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 3072, 4096},\
-    {RG_KEY_RIGHT, ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 0, 1024},\
-    {RG_KEY_DOWN,  ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_11, 0, 1024},\
-    {RG_KEY_LEFT,  ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN_DB_11, 3072, 4096},\
+// Host byte bits match MicroPython's Director constants:
+// left, right, up, down, A, B, C, D = 1,2,4,8,16,32,64,128.
+// Map C/D to Select/Start so the standard Retro-Go console cores get the full
+// 8-way + 4-button layout they expect, then recover Menu/Option with combos.
+// Bit 7 (D/Start) is not a live wire bit under input protocol v2 -- it's
+// mirrored by rg_input.c from "extra" bit 0 of the joystick frame (see
+// docs/input-protocol-v2.md) so this map is unchanged.
+#define RG_GAMEPAD_HOST_MAP {\
+    {RG_KEY_LEFT,   .mask = (1 << 0)},\
+    {RG_KEY_RIGHT,  .mask = (1 << 1)},\
+    {RG_KEY_UP,     .mask = (1 << 2)},\
+    {RG_KEY_DOWN,   .mask = (1 << 3)},\
+    {RG_KEY_A,      .mask = (1 << 4)},\
+    {RG_KEY_B,      .mask = (1 << 5)},\
+    {RG_KEY_SELECT, .mask = (1 << 6)},\
+    {RG_KEY_START,  .mask = (1 << 7)},\
 }
-#define RG_GAMEPAD_GPIO_MAP {\
-    {RG_KEY_SELECT, .num = GPIO_NUM_38, .pullup = 1, .level = 0},\
-    {RG_KEY_START,  .num = GPIO_NUM_39, .pullup = 1, .level = 0},\
-    {RG_KEY_MENU,   .num = GPIO_NUM_40, .pullup = 1, .level = 0},\
-    {RG_KEY_OPTION, .num = GPIO_NUM_41, .pullup = 1, .level = 0},\
-    {RG_KEY_A,      .num = GPIO_NUM_42, .pullup = 1, .level = 0},\
-    {RG_KEY_B,      .num = GPIO_NUM_2,  .pullup = 1, .level = 0},\
+#define RG_GAMEPAD_VIRT_MAP {\
+    {RG_KEY_MENU,   .src = RG_KEY_START | RG_KEY_SELECT},\
+    {RG_KEY_OPTION, .src = RG_KEY_SELECT | RG_KEY_A    },\
 }
 
 
@@ -82,10 +108,22 @@
 
 // Ventilastation POV display
 #define RG_VS_ENABLE_POV_DISPLAY    1
-#define RG_VS_HALL_GPIO             GPIO_NUM_6
+#define RG_VS_HALL_GPIO             GPIO_NUM_7
 #define RG_VS_LED_SPI_HOST          SPI2_HOST
-#define RG_VS_LED_MOSI              GPIO_NUM_16
-#define RG_VS_LED_CLK               GPIO_NUM_15
+#define RG_VS_LED_MOSI              GPIO_NUM_13
+#define RG_VS_LED_CLK               GPIO_NUM_12
+// CS driven low for each 444-byte burst so the hardware workbench SPI slave
+// can frame transactions. APA102 strips ignore CS; GPIO17 is free in this config.
+#define RG_VS_LED_CS                GPIO_NUM_14
+
+// Host link: the spinning board talks to the base-station host over UART2 —
+// sound/music triggers out, input bytes in — matching the MicroPython
+// serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9, 115200 8N1, the machine.UART
+// default).
+#define RG_VS_SERIAL_UART_NUM       2
+#define RG_VS_SERIAL_TX             GPIO_NUM_5
+#define RG_VS_SERIAL_RX             GPIO_NUM_6
+#define RG_VS_SERIAL_BAUD           115200
 
 // SPI Display (back up working)
 #define RG_GPIO_LCD_MISO            GPIO_NUM_17
@@ -94,8 +132,7 @@
 #define RG_GPIO_LCD_CS              GPIO_NUM_8
 #define RG_GPIO_LCD_DC              GPIO_NUM_15
 #define RG_GPIO_LCD_BCKL            GPIO_NUM_NC
-#define RG_GPIO_LCD_RST             GPIO_NUM_5
-
+#define RG_GPIO_LCD_RST             GPIO_NUM_NC
 #define RG_GPIO_SDSPI_MISO          GPIO_NUM_13
 #define RG_GPIO_SDSPI_MOSI          GPIO_NUM_11
 #define RG_GPIO_SDSPI_CLK           GPIO_NUM_12
