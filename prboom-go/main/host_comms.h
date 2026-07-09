@@ -2,11 +2,9 @@
 
 // Host comms transport selector for prboom-go.
 //
-// Sound/music triggers (outbound) and input bytes (inbound) ride either the
-// WiFi/TCP bridge (desktop pyglet emulator) or the UART serial link (spinning
-// hardware base-station host), chosen at compile time by RG_VS_ENABLE_TCP_BRIDGE.
-// Both transports use the same "line\n" + data framing. The display path is
-// independent (TCP frames vs SPI LED strip).
+// Sound/music triggers (outbound) and input bytes (inbound) ride the UART
+// serial link to the base-station host, framed as "line\n" + data. The
+// display path is independent (the POV driver's SPI LED strip).
 
 #include "vs_host_bridge.h"
 

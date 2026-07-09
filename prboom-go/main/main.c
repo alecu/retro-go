@@ -440,20 +440,8 @@ void app_main()
 
     update = rg_surface_create(SCREENWIDTH, SCREENHEIGHT, RG_PIXEL_PAL565_BE, MEM_FAST);
 
-    // Bring up the host comms transport used for sound/music triggers and input:
-    // the WiFi/TCP bridge in emulator mode, the UART serial link in hardware mode.
+    // Bring up the UART host link used for sound/music triggers and input.
     host_init();
-
-    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
-#if RG_VS_ENABLE_TCP_BRIDGE
-    // Development: register callbacks so the POV driver forwards frames and palette
-    // to the desktop pyglet emulator over the TCP bridge.
-    rg_vs_pov_set_tcp_bridge(host_send, host_connected);
-#else
-    // Hardware: no display bridge — the POV driver drives the spinning LED strip
-    // over SPI. Still call this (with NULLs) so the display task starts.
-    rg_vs_pov_set_tcp_bridge(NULL, NULL);
-#endif
 
     const char *iwad = NULL;
     const char *pwad = NULL;

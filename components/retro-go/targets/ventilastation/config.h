@@ -116,17 +116,10 @@
 // can frame transactions. APA102 strips ignore CS; GPIO17 is free in this config.
 #define RG_VS_LED_CS                GPIO_NUM_14
 
-// POV output mode: 0 = drive the spinning LED strip over SPI (real hardware),
-// 1 = stream frames to the desktop pyglet emulator over TCP/WiFi (development).
-// Override at build time without editing this file: -DRG_VS_ENABLE_TCP_BRIDGE=1
-#ifndef RG_VS_ENABLE_TCP_BRIDGE
-#define RG_VS_ENABLE_TCP_BRIDGE     0
-#endif
-
-// Hardware-mode host link (RG_VS_ENABLE_TCP_BRIDGE=0): the spinning board talks
-// to the base-station host over UART2 — sound/music triggers out, input bytes in
-// — matching the MicroPython serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9,
-// 115200 8N1, the machine.UART default). Unused in TCP/emulator mode.
+// Host link: the spinning board talks to the base-station host over UART2 —
+// sound/music triggers out, input bytes in — matching the MicroPython
+// serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9, 115200 8N1, the machine.UART
+// default).
 #define RG_VS_SERIAL_UART_NUM       2
 #define RG_VS_SERIAL_TX             GPIO_NUM_5
 #define RG_VS_SERIAL_RX             GPIO_NUM_6

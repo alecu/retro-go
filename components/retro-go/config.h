@@ -167,11 +167,6 @@
 #define RG_SCREEN_VISIBLE_AREA {0, 0, 0, 0}
 #endif
 
-// Ventilastation POV: 0 = drive spinning LEDs over SPI, 1 = stream to desktop emulator over TCP.
-#ifndef RG_VS_ENABLE_TCP_BRIDGE
-#define RG_VS_ENABLE_TCP_BRIDGE 0
-#endif
-
 #ifndef RG_LANG_DEFAULT
 #define RG_LANG_DEFAULT RG_LANG_EN
 #endif

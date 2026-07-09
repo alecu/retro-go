@@ -17,7 +17,6 @@
 #include "gui.h"
 #include "webui.h"
 #include "updater.h"
-#include "vs_host_bridge.h"
 #include "drivers/display/ventilastation_pov.h"
 
 #if RG_VENTILASTATION_POV_ENABLED
@@ -483,15 +482,6 @@ void app_main(void)
         else
             RG_LOGI("VFS LittleFS mounted at /vfs\n");
     }
-    // Select the POV output mode (see RG_VS_ENABLE_TCP_BRIDGE in config.h).
-#if RG_VS_ENABLE_TCP_BRIDGE
-    // Development: stream POV frames to the desktop pyglet emulator over TCP.
-    vs_host_bridge_init();
-    rg_vs_pov_set_tcp_bridge(vs_host_bridge_send, vs_host_bridge_connected);
-#else
-    // Hardware: drive the spinning LED strip over SPI (no bridge).
-    rg_vs_pov_set_tcp_bridge(NULL, NULL);
-#endif
 #endif
 
     if (!rg_storage_ready())

@@ -58,120 +58,6 @@ static volatile bool rebuilding = true;
 static volatile int64_t last_turn = 0;
 static volatile int64_t last_turn_duration = 102400;
 
-static rg_vs_tcp_send_fn      tcp_send_fn      = NULL;
-static rg_vs_tcp_connected_fn tcp_connected_fn = NULL;
-
-// Shared frame counter and connection state across indexed and RGB TCP send paths.
-static int  tcp_frame_count    = 0;
-static bool tcp_was_connected  = false;
-
-// Set by rg_vs_pov_set_tcp_bridge() to signal the display task whether to use SPI.
-// vs_display_task waits on vs_mode_set before touching any SPI hardware, so that
-// desktop mode (TCP bridge active) can skip the SPI acquisition entirely and keep
-// the LCD display task unblocked.
-static volatile bool vs_mode_set  = false;  // rg_vs_pov_set_tcp_bridge() was called
-static volatile bool vs_tcp_mode  = false;  // true = desktop/emulator, skip SPI
-
-void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn)
-{
-    tcp_send_fn      = send_fn;
-    tcp_connected_fn = connected_fn;
-    vs_tcp_mode      = (send_fn != NULL);
-    vs_mode_set      = true;
-}
-
-#define VS_TCP_FRAME_DIVISOR 1
-
-static void vs_tcp_send_palette(void)
-{
-    if (!tcp_send_fn || !tcp_connected_fn || !tcp_connected_fn())
-        return;
-
-    uint8_t buf[256 * 4];
-    for (int i = 0; i < 256; i++)
-    {
-        uint32_t c = vs_palette[i]; // 0x00RRGGBB
-        buf[i * 4 + 0] = 0xFF;                 // A
-        buf[i * 4 + 1] = (c >> 0)  & 0xFF;    // B
-        buf[i * 4 + 2] = (c >> 8)  & 0xFF;    // G
-        buf[i * 4 + 3] = (c >> 16) & 0xFF;    // R
-    }
-    tcp_send_fn("palette 1", buf, sizeof(buf));
-}
-
-// Returns true if connected; handles reconnect detection and palette resend.
-static bool vs_tcp_check_connection(void)
-{
-    bool has_send = (tcp_send_fn != NULL);
-    bool has_conn = (tcp_connected_fn != NULL);
-    bool is_conn  = has_conn && tcp_connected_fn();
-    if (!has_send || !has_conn || !is_conn)
-    {
-        if (tcp_frame_count % 300 == 0)
-            RG_LOGD("vs_pov: check_connection: has_send=%d has_conn=%d is_conn=%d was=%d\n",
-                    (int)has_send, (int)has_conn, (int)is_conn, (int)tcp_was_connected);
-        tcp_was_connected = false;
-        return false;
-    }
-    if (!tcp_was_connected)
-    {
-        tcp_was_connected = true;
-        RG_LOGI("vs_pov: emulator (re)connected — resending palette\n");
-        vs_tcp_send_palette();
-    }
-    return true;
-}
-
-// Send indexed (palette-based) frame: 256 columns × 54 palette indices.
-static void vs_tcp_send_frame(void)
-{
-    if (++tcp_frame_count % VS_TCP_FRAME_DIVISOR != 0)
-        return;
-    if (!vs_tcp_check_connection())
-        return;
-
-    static uint8_t tcp_frame[RG_VS_COLUMNS * RG_VS_PIXELS];
-    for (int angle = 0; angle < RG_VS_COLUMNS; angle++)
-    {
-        for (int led = 0; led < RG_VS_PIXELS; led++)
-        {
-            uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
-            int x = ((pos >> 8) & 0xFF) - 128 + screen_width / 2;
-            int y = (pos & 0xFF)        - 128 + screen_height / 2;
-            tcp_frame[angle * RG_VS_PIXELS + led] = vs_data[y * screen_width + x];
-        }
-    }
-    RG_LOGD("vs_pov: sending frame #%d (%d bytes)\n", tcp_frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
-    tcp_send_fn("frame", tcp_frame, sizeof(tcp_frame));
-}
-
-// Send RGB frame: 256 columns × 54 LEDs × 3 bytes (R, G, B).
-static void vs_tcp_send_frame_rgb(void)
-{
-    if (++tcp_frame_count % VS_TCP_FRAME_DIVISOR != 0)
-        return;
-    if (!vs_tcp_check_connection())
-        return;
-
-    static uint8_t tcp_frame[RG_VS_COLUMNS * RG_VS_PIXELS * 3];
-    for (int angle = 0; angle < RG_VS_COLUMNS; angle++)
-    {
-        for (int led = 0; led < RG_VS_PIXELS; led++)
-        {
-            uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
-            int x = ((pos >> 8) & 0xFF) - 128 + screen_width / 2;
-            int y = (pos & 0xFF)        - 128 + screen_height / 2;
-            uint32_t c = vs_data_rgb[y * screen_width + x]; // 0x00RRGGBB
-            int base = (angle * RG_VS_PIXELS + led) * 3;
-            tcp_frame[base + 0] = (c >> 16) & 0xFF; // R
-            tcp_frame[base + 1] = (c >> 8)  & 0xFF; // G
-            tcp_frame[base + 2] =  c        & 0xFF; // B
-        }
-    }
-    RG_LOGD("vs_pov: sending frame_rgb #%d (%d bytes)\n", tcp_frame_count / VS_TCP_FRAME_DIVISOR, (int)sizeof(tcp_frame));
-    tcp_send_fn("frame_rgb", tcp_frame, sizeof(tcp_frame));
-}
-
 static void vs_setup_projection_table(void) {
     int center_x = screen_width / 2;
     int center_y = screen_height / 2;
@@ -298,18 +184,7 @@ static void gpu_step(void) {
 
 static void IRAM_ATTR vs_display_task(void *arg) {
     hall_init();
-    // Wait for rg_vs_pov_set_tcp_bridge() to tell us the operating mode.
-    while (!vs_mode_set)
-        vTaskDelay(pdMS_TO_TICKS(50));
-
-    if (vs_tcp_mode) {
-        // Desktop/emulator: no SPI hardware needed — yield forever so the
-        // LCD display task can use the SPI bus uncontested.
-        while (true)
-            vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    // Hardware mode: acquire the bus once and keep driving the LED strip.
+    // Acquire the bus once and keep driving the LED strip.
     spi_start_buses();
     ESP_ERROR_CHECK(spi_device_acquire_bus(spi_handle, portMAX_DELAY));
     while (true) {
@@ -365,17 +240,12 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count)
     if (count > 256)
         count = 256;
     memcpy(vs_palette, palette, count * sizeof(uint32_t));
-    vs_tcp_send_palette();
 }
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface)
 {
     if (!surface || !surface->data)
         return;
-    if (tcp_frame_count % 300 == 0)
-        RG_LOGD("vs_pov: submit_surface frame=%d sz=%dx%d fmt=%d tcp_mode=%d\n",
-                tcp_frame_count, surface->width, surface->height, surface->format, (int)vs_tcp_mode);
-
     // (Re)allocate framebuffers and rebuild projection table when dimensions change.
     if (screen_width != surface->width || screen_height != surface->height)
     {
@@ -428,7 +298,6 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
                 vs_palette[i] = (r << 16) | (g << 8) | b;
             }
         }
-        vs_tcp_send_frame();
     }
     else
     {
@@ -467,16 +336,7 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
                     dst[x] = ((uint32_t)row[x*3] << 16) | ((uint32_t)row[x*3+1] << 8) | row[x*3+2];
             }
         }
-        vs_tcp_send_frame_rgb();
     }
-}
-
-void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length)
-{
-    if (!vs_data || !framebuffer)
-        return;
-    memcpy(vs_data, framebuffer, length);
-    vs_tcp_send_frame();
 }
 
 #else
@@ -495,16 +355,6 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface) {
     (void)surface;
-}
-
-void rg_vs_pov_submit_frame(const uint8_t *framebuffer, size_t length) {
-    (void)framebuffer;
-    (void)length;
-}
-
-void rg_vs_pov_set_tcp_bridge(rg_vs_tcp_send_fn send_fn, rg_vs_tcp_connected_fn connected_fn) {
-    (void)send_fn;
-    (void)connected_fn;
 }
 
 #endif
