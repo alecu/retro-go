@@ -1,26 +1,16 @@
 #include "emu_audio_bridge.h"
-#include "rg_system.h" // pulls in the target config.h (RG_VS_SERIAL_*) + RG_LOG*
+#include "rg_system.h" // pulls in the target config.h and RG_LOG*
 
 #include <string.h>
 #include <stdio.h>
 
-// Only the ventilastation target defines a UART host link. On every other
-// target (SDL desktop builds, other boards) the whole bridge compiles to the
-// no-op stubs at the bottom, so the chip taps cost nothing there.
-#if defined(RG_VS_SERIAL_UART_NUM)
+// Only the Ventilastation target has a UART host link. On every other target
+// (SDL desktop builds, other boards) the whole bridge compiles to the no-op
+// stubs at the bottom, so the chip taps cost nothing there.
+#if defined(RG_VS_ENABLE_HOST_BRIDGE)
 
 #include <driver/uart.h>
-#include <driver/gpio.h> // GPIO_NUM_* used by RG_VS_SERIAL_TX/RX
-
-#ifndef RG_VS_SERIAL_TX
-#define RG_VS_SERIAL_TX 10
-#endif
-#ifndef RG_VS_SERIAL_RX
-#define RG_VS_SERIAL_RX 9
-#endif
-#ifndef RG_VS_SERIAL_BAUD
-#define RG_VS_SERIAL_BAUD 115200
-#endif
+#include "vs_board_config.h"
 
 // One emulated video frame's worth of encoded register writes. The sustained
 // link budget is ~190 bytes/frame at 60fps; this cap is far above that so a
@@ -44,11 +34,19 @@ static int64_t  stat_t0     = 0;
 static int      stat_bytes  = 0;
 static int      stat_frames = 0;
 static int      stat_drops  = 0;
+static bool     uart_ready  = false;
+static vs_board_config_t board_config;
 
 static void emu_uart_init(void)
 {
+    if (uart_ready)
+        return;
+    if (!vs_board_config_load(&board_config)) {
+        RG_LOGE("emu_audio: board configuration missing; run make configure-board\n");
+        return;
+    }
     const uart_config_t cfg = {
-        .baud_rate = RG_VS_SERIAL_BAUD,
+        .baud_rate = board_config.serial_baud,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
@@ -57,26 +55,29 @@ static void emu_uart_init(void)
     };
     // Tolerate an already-installed driver (e.g. if a serial input bridge is
     // ever added on the same UART): install only once.
-    if (!uart_is_driver_installed(RG_VS_SERIAL_UART_NUM)) {
-        ESP_ERROR_CHECK(uart_driver_install(RG_VS_SERIAL_UART_NUM, 256, EMU_TX_RINGBUF, 0, NULL, 0));
-        ESP_ERROR_CHECK(uart_param_config(RG_VS_SERIAL_UART_NUM, &cfg));
-        ESP_ERROR_CHECK(uart_set_pin(RG_VS_SERIAL_UART_NUM, RG_VS_SERIAL_TX, RG_VS_SERIAL_RX,
+    if (!uart_is_driver_installed(board_config.serial_uart)) {
+        ESP_ERROR_CHECK(uart_driver_install(board_config.serial_uart, 256, EMU_TX_RINGBUF, 0, NULL, 0));
+        ESP_ERROR_CHECK(uart_param_config(board_config.serial_uart, &cfg));
+        ESP_ERROR_CHECK(uart_set_pin(board_config.serial_uart, board_config.serial_tx, board_config.serial_rx,
                                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     }
+    uart_ready = true;
 }
 
 static void emu_send(const char *line, const uint8_t *data, size_t len)
 {
     // Same framing as the Doom bridge: "<line>\n" then optional binary payload.
-    uart_write_bytes(RG_VS_SERIAL_UART_NUM, line, strlen(line));
-    uart_write_bytes(RG_VS_SERIAL_UART_NUM, "\n", 1);
+    uart_write_bytes(board_config.serial_uart, line, strlen(line));
+    uart_write_bytes(board_config.serial_uart, "\n", 1);
     if (data && len)
-        uart_write_bytes(RG_VS_SERIAL_UART_NUM, (const char *)data, len);
+        uart_write_bytes(board_config.serial_uart, (const char *)data, len);
 }
 
 void emu_audio_begin(const char *system)
 {
     emu_uart_init();
+    if (!uart_ready)
+        return;
     char line[32];
     snprintf(line, sizeof(line), "achip %s", system ? system : "unknown");
     emu_send(line, NULL, 0);
@@ -87,7 +88,8 @@ void emu_audio_begin(const char *system)
     stat_t0     = rg_system_timer();
     stat_bytes  = stat_frames = stat_drops = 0;
     RG_LOGI("emu_audio: started (%s) on UART%d @ %d baud\n",
-            system ? system : "?", RG_VS_SERIAL_UART_NUM, RG_VS_SERIAL_BAUD);
+            system ? system : "?", (int)board_config.serial_uart,
+            (int)board_config.serial_baud);
 }
 
 void emu_audio_end(void)

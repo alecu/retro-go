@@ -13,10 +13,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs.h>
-#include <nvs_flash.h>
-
 #include "intensidades.h"
 #include "rg_system.h"
+#include "vs_board_config.h"
 
 #define RG_VS_COLUMNS 256
 #define RG_VS_PIXELS 54
@@ -30,6 +29,7 @@
 #define RG_VS_ANGLE_OFFSET 64
 
 static int vs_angle_offset = RG_VS_ANGLE_OFFSET;
+static vs_board_config_t vs_board;
 
 // Indexed (palette) framebuffer — 1 byte per pixel, updated by rg_vs_pov_submit_surface().
 static uint8_t  *vs_data     = NULL;
@@ -99,27 +99,24 @@ static void spi_start_buses(void) {
     esp_err_t ret;
     const spi_bus_config_t buscfg = {
         .miso_io_num = -1,
-        .mosi_io_num = RG_VS_LED_MOSI,
-        .sclk_io_num = RG_VS_LED_CLK,
+        .mosi_io_num = vs_board.led_mosi,
+        .sclk_io_num = vs_board.led_clk,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = 32,
     };
-    ret = spi_bus_initialize(RG_VS_LED_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    ret = spi_bus_initialize((spi_host_device_t)vs_board.led_spi_host, &buscfg, SPI_DMA_CH_AUTO);
     RG_ASSERT(ret == ESP_OK || ret == ESP_ERR_INVALID_STATE, "spi_bus_initialize failed.");
 
-    // RG_VS_LED_CS drives a real chip-select for the hardware workbench SPI slave.
-    // Falls back to -1 (no CS) on targets that don't define it (e.g. devkit with LCD).
-#ifndef RG_VS_LED_CS
-#define RG_VS_LED_CS -1
-#endif
+    // The configured CS frames each LED burst for the hardware workbench SPI
+    // slave. APA102 strips ignore it, so -1 is also valid for a board without CS.
     const spi_device_interface_config_t devcfg = {
         .clock_speed_hz = SPI_MASTER_FREQ_20M,
         .mode = 0,
-        .spics_io_num = RG_VS_LED_CS,
+        .spics_io_num = vs_board.led_cs,
         .queue_size = 2,
     };
-    ret = spi_bus_add_device(RG_VS_LED_SPI_HOST, &devcfg, &spi_handle);
+    ret = spi_bus_add_device((spi_host_device_t)vs_board.led_spi_host, &devcfg, &spi_handle);
     RG_ASSERT(ret == ESP_OK, "spi_bus_add_device failed.");
 }
 
@@ -158,11 +155,11 @@ static void IRAM_ATTR hall_neg_sensed(void *arg) {
 }
 
 static void hall_init(void) {
-    gpio_set_direction(RG_VS_HALL_GPIO, GPIO_MODE_INPUT);
-    gpio_set_intr_type(RG_VS_HALL_GPIO, GPIO_INTR_NEGEDGE);
+    gpio_set_direction(vs_board.hall_gpio, GPIO_MODE_INPUT);
+    gpio_set_intr_type(vs_board.hall_gpio, GPIO_INTR_NEGEDGE);
     esp_err_t ret = gpio_install_isr_service(0);
     RG_ASSERT(ret == ESP_OK || ret == ESP_ERR_INVALID_STATE, "gpio_install_isr_service failed.");
-    ret = gpio_isr_handler_add(RG_VS_HALL_GPIO, hall_neg_sensed, (void *)RG_VS_HALL_GPIO);
+    ret = gpio_isr_handler_add(vs_board.hall_gpio, hall_neg_sensed, (void *)vs_board.hall_gpio);
     RG_ASSERT(ret == ESP_OK, "gpio_isr_handler_add failed.");
 }
 
@@ -197,26 +194,18 @@ bool rg_vs_pov_enabled(void) {
 }
 
 void rg_vs_pov_init(void) {
-    // Read pov_column_offset from NVS (written by MicroPython's _sync_pov_to_nvs()
-    // in native_apps.py before launching this app). nvs_flash_init() may not have
-    // been called yet (network init runs after display init), so we do it here.
-    {
-        esp_err_t err = nvs_flash_init();
-        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            nvs_flash_erase();
-            err = nvs_flash_init();
-        }
-        if (err == ESP_OK) {
-            nvs_handle_t h;
-            if (nvs_open("voom_pov", NVS_READONLY, &h) == ESP_OK) {
-                int32_t offset = 0;
-                if (nvs_get_i32(h, "col_offset", &offset) == ESP_OK) {
-                    vs_angle_offset = ((int)RG_VS_ANGLE_OFFSET + (int)offset + RG_VS_COLUMNS) % RG_VS_COLUMNS;
-                    RG_LOGI("vs_pov: NVS pov_column_offset=%d -> vs_angle_offset=%d\n", (int)offset, vs_angle_offset);
-                }
-                nvs_close(h);
-            }
-        }
+    if (!vs_board_config_load(&vs_board)) {
+        RG_LOGE("vs_pov: board configuration missing; run make configure-board\n");
+        return;
+    }
+    // POV calibration is independent of the board wiring and is adjusted from
+    // the MicroPython settings scene.
+    nvs_handle_t nvs;
+    if (nvs_open("voom_pov", NVS_READONLY, &nvs) == ESP_OK) {
+        int32_t offset;
+        if (nvs_get_i32(nvs, "col_offset", &offset) == ESP_OK)
+            vs_angle_offset = ((int)RG_VS_ANGLE_OFFSET + (int)offset + RG_VS_COLUMNS) % RG_VS_COLUMNS;
+        nvs_close(nvs);
     }
 
     vs_palette          = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);

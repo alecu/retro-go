@@ -2,19 +2,11 @@
 
 #include "rg_system.h"
 
-#if defined(ESP_PLATFORM) && defined(RG_VS_SERIAL_UART_NUM)
+#if defined(ESP_PLATFORM) && defined(RG_VS_ENABLE_HOST_BRIDGE)
 
 #include <string.h>
 
-#ifndef RG_VS_SERIAL_TX
-#define RG_VS_SERIAL_TX 10
-#endif
-#ifndef RG_VS_SERIAL_RX
-#define RG_VS_SERIAL_RX 9
-#endif
-#ifndef RG_VS_SERIAL_BAUD
-#define RG_VS_SERIAL_BAUD 115200
-#endif
+#include "vs_board_config.h"
 
 // ---- Input protocol v2 byte-stream parser ----
 // Feeds the UART transport below. Mirrors
@@ -136,15 +128,20 @@ uint8_t vs_host_bridge_get_extra(void)
 #define VS_HOST_TX_RINGBUF 8192
 
 static bool bridge_initialized = false;
+static vs_board_config_t board_config;
 
 void vs_host_bridge_init(void)
 {
     if (bridge_initialized)
         return;
+    if (!vs_board_config_load(&board_config)) {
+        RG_LOGE("vs_host: board configuration missing; run make configure-board\n");
+        return;
+    }
     bridge_initialized = true;
 
     const uart_config_t cfg = {
-        .baud_rate = RG_VS_SERIAL_BAUD,
+        .baud_rate = board_config.serial_baud,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
@@ -152,34 +149,39 @@ void vs_host_bridge_init(void)
         .source_clk = UART_SCLK_DEFAULT,
     };
 
-    if (!uart_is_driver_installed(RG_VS_SERIAL_UART_NUM))
+    if (!uart_is_driver_installed(board_config.serial_uart))
     {
-        ESP_ERROR_CHECK(uart_driver_install(RG_VS_SERIAL_UART_NUM, VS_HOST_RX_BUF, VS_HOST_TX_RINGBUF, 0, NULL, 0));
-        ESP_ERROR_CHECK(uart_param_config(RG_VS_SERIAL_UART_NUM, &cfg));
-        ESP_ERROR_CHECK(uart_set_pin(RG_VS_SERIAL_UART_NUM, RG_VS_SERIAL_TX, RG_VS_SERIAL_RX,
+        ESP_ERROR_CHECK(uart_driver_install(board_config.serial_uart, VS_HOST_RX_BUF, VS_HOST_TX_RINGBUF, 0, NULL, 0));
+        ESP_ERROR_CHECK(uart_param_config(board_config.serial_uart, &cfg));
+        ESP_ERROR_CHECK(uart_set_pin(board_config.serial_uart, board_config.serial_tx, board_config.serial_rx,
                                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     }
 
     RG_LOGI("vs_host: UART%d host link up (tx=%d rx=%d, %d baud)\n",
-            RG_VS_SERIAL_UART_NUM, RG_VS_SERIAL_TX, RG_VS_SERIAL_RX, RG_VS_SERIAL_BAUD);
+            (int)board_config.serial_uart, (int)board_config.serial_tx,
+            (int)board_config.serial_rx, (int)board_config.serial_baud);
 }
 
 void vs_host_bridge_send(const char *line, const uint8_t *data, size_t len)
 {
     vs_host_bridge_init();
-    uart_write_bytes(RG_VS_SERIAL_UART_NUM, line, strlen(line));
-    uart_write_bytes(RG_VS_SERIAL_UART_NUM, "\n", 1);
+    if (!bridge_initialized)
+        return;
+    uart_write_bytes(board_config.serial_uart, line, strlen(line));
+    uart_write_bytes(board_config.serial_uart, "\n", 1);
     if (data && len)
-        uart_write_bytes(RG_VS_SERIAL_UART_NUM, (const char *)data, len);
+        uart_write_bytes(board_config.serial_uart, (const char *)data, len);
 }
 
 int vs_host_bridge_recv_input(void)
 {
     vs_host_bridge_init();
+    if (!bridge_initialized)
+        return -1;
 
     uint8_t buf[64];
     int n;
-    while ((n = uart_read_bytes(RG_VS_SERIAL_UART_NUM, buf, sizeof(buf), 0)) > 0)
+    while ((n = uart_read_bytes(board_config.serial_uart, buf, sizeof(buf), 0)) > 0)
         vs_feed_bytes(buf, n);
 
     return (int)vs_joy1;
@@ -188,7 +190,7 @@ int vs_host_bridge_recv_input(void)
 bool vs_host_bridge_connected(void)
 {
     vs_host_bridge_init();
-    return true;
+    return bridge_initialized;
 }
 
 

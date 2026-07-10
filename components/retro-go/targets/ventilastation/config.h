@@ -18,8 +18,8 @@
 #define RG_AUDIO_USE_EXT_DAC        0   // 0 = Disable, 1 = Enable
 
 // Video
-// No LCD: the POV LED strip is the display and owns SPI2 (RG_VS_LED_* share the
-// same bus/pins as the LCD would). Use the dummy driver so the retro-go display
+// No LCD: the POV LED strip is the display and owns its configured SPI bus. Use
+// the dummy driver so the retro-go display
 // task never touches SPI — otherwise, in hardware POV mode, vs_display_task holds
 // the bus and the LCD task panics in spi_take_buffer.
 #define RG_SCREEN_DRIVER            2   // 0 = ILI9341/ST7789, 99 = SDL2, other = dummy (no LCD)
@@ -108,22 +108,10 @@
 
 // Ventilastation POV display
 #define RG_VS_ENABLE_POV_DISPLAY    1
-#define RG_VS_HALL_GPIO             GPIO_NUM_7
-#define RG_VS_LED_SPI_HOST          SPI2_HOST
-#define RG_VS_LED_MOSI              GPIO_NUM_13
-#define RG_VS_LED_CLK               GPIO_NUM_12
-// CS driven low for each 444-byte burst so the hardware workbench SPI slave
-// can frame transactions. APA102 strips ignore CS; GPIO17 is free in this config.
-#define RG_VS_LED_CS                GPIO_NUM_14
-
-// Host link: the spinning board talks to the base-station host over UART2 —
-// sound/music triggers out, input bytes in — matching the MicroPython
-// serialcomms.py pins/baud (tx=GPIO10, rx=GPIO9, 115200 8N1, the machine.UART
-// default).
-#define RG_VS_SERIAL_UART_NUM       2
-#define RG_VS_SERIAL_TX             GPIO_NUM_5
-#define RG_VS_SERIAL_RX             GPIO_NUM_6
-#define RG_VS_SERIAL_BAUD           115200
+// The board's GPIO and bus wiring lives in NVS namespace "vs_board", shared
+// with MicroPython and provisioned through `make configure-board`. These flags
+// only select the POV and UART-host-link implementations at build time.
+#define RG_VS_ENABLE_HOST_BRIDGE    1
 
 // SPI Display (back up working)
 #define RG_GPIO_LCD_MISO            GPIO_NUM_17
