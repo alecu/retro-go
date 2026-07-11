@@ -22,12 +22,13 @@ void voom_base_feedback_set_palette_black(uint32_t entry)
     palette_blue = entry & 0xff;
 }
 
-void voom_base_feedback_update(int damagecount, int armorpoints)
+void voom_base_feedback_update(int health, int armorpoints)
 {
-    int damage = damagecount;
-    if (damage < 0) damage = 0;
-    if (damage > 100) damage = 100;
-    const int servo = damage * 255 / 100;
+    // Doom's ordinary health scale is 0..100. Values above 100 (health
+    // pickups) intentionally hold the servo at the healthy endpoint.
+    if (health < 0) health = 0;
+    if (health > 100) health = 100;
+    const int servo = health * 255 / 100;
     int red = palette_red, green = palette_green, blue = palette_blue;
 
     // Doom blue armor is 200 points. The base API calls this shield.

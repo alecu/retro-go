@@ -134,7 +134,7 @@ void I_FinishUpdate(void)
 {
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
-    voom_base_feedback_update(players[displayplayer].damagecount,
+    voom_base_feedback_update(players[displayplayer].health,
                               players[displayplayer].armorpoints);
 }
 
