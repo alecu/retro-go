@@ -28,17 +28,25 @@ void voom_base_feedback_update(int damagecount, int armorpoints)
     if (damage < 0) damage = 0;
     if (damage > 100) damage = 100;
     const int servo = damage * 255 / 100;
-    int red = 0, green = 0, blue;
+    int red = palette_red, green = palette_green, blue = palette_blue;
 
-    if (damage) {
-        red = palette_red;
-        green = palette_green;
-        blue = palette_blue;
+    // Doom blue armor is 200 points. The base API calls this shield.
+    if (armorpoints < 0) armorpoints = 0;
+    if (armorpoints > 200) armorpoints = 200;
+    const int armor_blue = armorpoints * 255 / 200;
+
+    if (palette_red == 0 && palette_green == 0 && palette_blue == 0) {
+        // Normal palette: the player is okay, so the strip is armor blue.
+        red = green = 0;
+        blue = armor_blue;
     } else {
-        // Doom blue armor is 200 points. The base API calls this shield.
-        if (armorpoints < 0) armorpoints = 0;
-        if (armorpoints > 200) armorpoints = 200;
-        blue = armorpoints * 255 / 200;
+        const int hit = palette_red > palette_green ? palette_red : palette_green;
+        if (hit <= 63) {
+            // A weak red/green palette flash mixes with armor. Map 0..63 to
+            // full..zero armor blue; >=64 switches to the palette unchanged.
+            blue = palette_blue + armor_blue * (63 - hit) / 63;
+            if (blue > 255) blue = 255;
+        }
     }
 
     if (red != last_red || green != last_green || blue != last_blue) {
