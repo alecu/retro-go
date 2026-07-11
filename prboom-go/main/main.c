@@ -44,6 +44,7 @@
 #include "drivers/display/ventilastation_pov.h"
 #include "host_comms.h"
 #include "voom_audio_bridge.h"
+#include "voom_base_feedback.h"
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
@@ -133,6 +134,8 @@ void I_FinishUpdate(void)
 {
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
+    voom_base_feedback_update(players[displayplayer].damagecount,
+                              players[displayplayer].armorpoints);
 }
 
 bool I_StartDisplay(void)
@@ -153,6 +156,7 @@ void I_SetPalette(int pal)
     Z_Free(palette);
 
     uint32_t *palette32 = V_BuildPalette(pal, 32);
+    voom_base_feedback_set_palette_black(palette32[0]);
     rg_vs_pov_set_palette32(palette32, 256);
     Z_Free(palette32);
 
