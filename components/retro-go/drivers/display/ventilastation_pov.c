@@ -13,6 +13,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs.h>
+#include "color_pipeline.h"
 #include "intensidades.h"
 #include "rg_system.h"
 #include "vs_board_config.h"
@@ -58,6 +59,23 @@ static volatile bool rebuilding = true;
 static volatile int64_t last_turn = 0;
 static volatile int64_t last_turn_duration = 102400;
 
+static void vs_load_color_profile(void) {
+    uint8_t profile[COLOR_PIPELINE_PROFILE_BYTES];
+    size_t length = sizeof(profile);
+    nvs_handle_t nvs;
+    if (nvs_open("voom_pov", NVS_READONLY, &nvs) != ESP_OK) {
+        RG_LOGW("vs_pov: no POV colour profile; using legacy transfer tables\n");
+        return;
+    }
+    esp_err_t result = nvs_get_blob(nvs, "color_v1", profile, &length);
+    nvs_close(nvs);
+    if (result != ESP_OK || !color_pipeline_apply(profile, length)) {
+        RG_LOGW("vs_pov: invalid POV colour profile; using legacy transfer tables\n");
+        return;
+    }
+    RG_LOGI("vs_pov: loaded calibrated POV colour profile\n");
+}
+
 static void vs_setup_projection_table(void) {
     int center_x = screen_width / 2;
     int center_y = screen_height / 2;
@@ -86,12 +104,20 @@ static void project_angle(int angle, uint32_t row[RG_VS_PIXELS]) {
             doom_color = vs_data_rgb[y * screen_width + x];
         }
 
-        int level = intensidades_por_led[led];
-        uint32_t color = (brillos[led] & 0x1f) | 0xe0 |
-            intensidades[level][(doom_color & 0xff0000) >> 16] << 24 |
-            intensidades[level][(doom_color & 0x00ff00) >> 8] << 16 |
-            intensidades[level][doom_color & 0x0000ff] << 8;
-        row[led] = color;
+        if (color_pipeline_is_active()) {
+            row[led] = color_pipeline_encode_rgb(
+                led,
+                (doom_color & 0xff0000) >> 16,
+                (doom_color & 0x00ff00) >> 8,
+                doom_color & 0x0000ff
+            );
+        } else {
+            int level = intensidades_por_led[led];
+            row[led] = (brillos[led] & 0x1f) | 0xe0 |
+                intensidades[level][(doom_color & 0xff0000) >> 16] << 24 |
+                intensidades[level][(doom_color & 0x00ff00) >> 8] << 16 |
+                intensidades[level][doom_color & 0x0000ff] << 8;
+        }
     }
 }
 
@@ -207,6 +233,7 @@ void rg_vs_pov_init(void) {
             vs_angle_offset = ((int)RG_VS_ANGLE_OFFSET + (int)offset + RG_VS_COLUMNS) % RG_VS_COLUMNS;
         nvs_close(nvs);
     }
+    vs_load_color_profile();
 
     vs_palette          = rg_alloc(256 * sizeof(uint32_t), MEM_FAST);
     vs_projection_table = rg_alloc(RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint16_t), MEM_FAST);
