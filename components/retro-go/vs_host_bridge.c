@@ -180,6 +180,28 @@ static bool vs_povcal_apply_set(const char *command)
     return true;
 }
 
+static bool vs_povcal_apply_test(const char *command)
+{
+    int level = 255;
+    const char *level_at = strchr(command, ' ');
+    char name[16];
+    size_t name_len = level_at ? (size_t)(level_at - command) : strlen(command);
+    if (name_len == 0 || name_len >= sizeof(name)) return false;
+    memcpy(name, command, name_len);
+    name[name_len] = '\0';
+    if (level_at && !vs_povcal_number(level_at + 1, 0, 255, &level)) return false;
+    int pattern;
+    if (strcmp(name, "off") == 0) pattern = COLOR_TEST_OFF;
+    else if (strcmp(name, "gray") == 0) pattern = COLOR_TEST_GRAY;
+    else if (strcmp(name, "red") == 0) pattern = COLOR_TEST_RED;
+    else if (strcmp(name, "green") == 0) pattern = COLOR_TEST_GREEN;
+    else if (strcmp(name, "blue") == 0) pattern = COLOR_TEST_BLUE;
+    else if (strcmp(name, "white") == 0) pattern = COLOR_TEST_WHITE;
+    else if (strcmp(name, "radial") == 0) pattern = COLOR_TEST_RADIAL;
+    else return false;
+    return color_pipeline_set_test_pattern(pattern, level);
+}
+
 static void vs_handle_command(const char *cmd)
 {
     if (strcmp(cmd, "povcal get") == 0) {
@@ -192,6 +214,14 @@ static void vs_handle_command(const char *cmd)
             vs_povcal_send_state();
         else
             vs_povcal_send_error("invalid_value");
+        return;
+    }
+
+    if (strncmp(cmd, "povcal test ", 12) == 0) {
+        if (vs_povcal_apply_test(cmd + 12))
+            vs_povcal_send_state();
+        else
+            vs_povcal_send_error("invalid_test");
         return;
     }
 
