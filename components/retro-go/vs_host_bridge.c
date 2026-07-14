@@ -253,7 +253,10 @@ static void vs_handle_command(const char *cmd)
         return;
     }
 
-    if (strcmp(cmd, "reset") == 0)
+    // EXIT is the emulator's Home/Guide action.  A native partition cannot
+    // keep its process alive while returning to the launcher, so it follows
+    // the same reset path as RESET; boot routing takes it back to MicroPython.
+    if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "exit") == 0)
     {
         rg_system_restart();
         return;

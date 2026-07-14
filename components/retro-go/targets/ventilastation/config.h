@@ -74,13 +74,11 @@
 // # ADC_1_6 = GPIO7 (joystick X — not populated)
 // Floating ADC pins produce garbage readings, so the ADC map is disabled.
 
-// Host byte bits match MicroPython's Director constants:
-// left, right, up, down, A, B, C, D = 1,2,4,8,16,32,64,128.
-// Map C/D to Select/Start so the standard Retro-Go console cores get the full
-// 8-way + 4-button layout they expect, then recover Menu/Option with combos.
-// Bit 7 (D/Start) is not a live wire bit under input protocol v2 -- it's
-// mirrored by rg_input.c from "extra" bit 0 of the joystick frame (see
-// docs/input-protocol-v2.md) so this map is unchanged.
+// Input protocol v2 provides two normalized controllers.  The low seven bits
+// of each joystick byte are left/right/up/down/A/B/X; Y, Start, and Back live
+// in the shared extra byte.  Keep those three button identities intact for
+// every native app rather than synthesising menu combos.  Shoulder and trigger
+// inputs are intentionally not encoded by this protocol revision.
 #define RG_GAMEPAD_HOST_MAP {\
     {RG_KEY_LEFT,   .mask = (1 << 0)},\
     {RG_KEY_RIGHT,  .mask = (1 << 1)},\
@@ -88,12 +86,22 @@
     {RG_KEY_DOWN,   .mask = (1 << 3)},\
     {RG_KEY_A,      .mask = (1 << 4)},\
     {RG_KEY_B,      .mask = (1 << 5)},\
-    {RG_KEY_SELECT, .mask = (1 << 6)},\
-    {RG_KEY_START,  .mask = (1 << 7)},\
+    {RG_KEY_X,      .mask = (1 << 6)},\
+    {RG_KEY_Y,      .mask = (1 << 16)},\
+    {RG_KEY_START,  .mask = (1 << 18)},\
+    {RG_KEY_SELECT, .mask = (1 << 19)},\
 }
-#define RG_GAMEPAD_VIRT_MAP {\
-    {RG_KEY_MENU,   .src = RG_KEY_START | RG_KEY_SELECT},\
-    {RG_KEY_OPTION, .src = RG_KEY_SELECT | RG_KEY_A    },\
+#define RG_GAMEPAD_HOST_MAP2 {\
+    {RG_KEY_LEFT,   .mask = (1 << 8)},\
+    {RG_KEY_RIGHT,  .mask = (1 << 9)},\
+    {RG_KEY_UP,     .mask = (1 << 10)},\
+    {RG_KEY_DOWN,   .mask = (1 << 11)},\
+    {RG_KEY_A,      .mask = (1 << 12)},\
+    {RG_KEY_B,      .mask = (1 << 13)},\
+    {RG_KEY_X,      .mask = (1 << 14)},\
+    {RG_KEY_Y,      .mask = (1 << 17)},\
+    {RG_KEY_START,  .mask = (1 << 20)},\
+    {RG_KEY_SELECT, .mask = (1 << 21)},\
 }
 
 

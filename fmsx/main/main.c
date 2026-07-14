@@ -40,6 +40,20 @@ static uint16_t *XBuf;
 
 #include <fmsx.h>
 
+static unsigned int msx_joystick(uint32_t joystick)
+{
+    unsigned int state = 0;
+    if (joystick & RG_KEY_LEFT)  state |= JST_LEFT;
+    if (joystick & RG_KEY_RIGHT) state |= JST_RIGHT;
+    if (joystick & RG_KEY_UP)    state |= JST_UP;
+    if (joystick & RG_KEY_DOWN)  state |= JST_DOWN;
+    // MSX joysticks have two fire signals.  A/X and B/Y are their respective
+    // aliases so all four v2 face buttons remain useful on both ports.
+    if (joystick & (RG_KEY_A | RG_KEY_X)) state |= JST_FIREA;
+    if (joystick & (RG_KEY_B | RG_KEY_Y)) state |= JST_FIREB;
+    return state;
+}
+
 static Image NormScreen;
 const char *Title = "fMSX 6.0";
 const char *Disks[2][MAXDISKS + 1];
@@ -128,9 +142,11 @@ int ProcessEvents(int Wait)
 {
     for (int i = 0; i < 16; ++i)
         KeyState[i] = 0xFF;
-    JoyState = 0;
-
     uint32_t joystick = rg_input_read_gamepad();
+    uint32_t joystick2 = rg_input_read_gamepad2();
+    // fMSX packs its two joystick ports into the low and high bytes.
+    // Player 2 remains a joystick even while player 1 uses keyboard mode.
+    JoyState = msx_joystick(joystick2) << 8;
 
     if (joystick == RG_KEY_MENU)
     {
@@ -228,18 +244,7 @@ int ProcessEvents(int Wait)
     }
     else
     {
-        if (joystick & RG_KEY_LEFT)
-            JoyState |= JST_LEFT;
-        if (joystick & RG_KEY_RIGHT)
-            JoyState |= JST_RIGHT;
-        if (joystick & RG_KEY_UP)
-            JoyState |= JST_UP;
-        if (joystick & RG_KEY_DOWN)
-            JoyState |= JST_DOWN;
-        if (joystick & RG_KEY_A)
-            JoyState |= JST_FIREA;
-        if (joystick & RG_KEY_B)
-            JoyState |= JST_FIREB;
+        JoyState |= msx_joystick(joystick);
     }
 
     return 0;

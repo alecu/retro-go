@@ -17,12 +17,12 @@ static const keymap_t KEYMAPS[] = {
 	{"Type A", {
 		{SNES_A_MASK, RG_KEY_A, 0},
 		{SNES_B_MASK, RG_KEY_B, 0},
-		{SNES_X_MASK, RG_KEY_START, 0},
-		{SNES_Y_MASK, RG_KEY_SELECT, 0},
-		{SNES_TL_MASK, RG_KEY_B, RG_KEY_MENU},
-		{SNES_TR_MASK, RG_KEY_A, RG_KEY_MENU},
-		{SNES_START_MASK, RG_KEY_START, RG_KEY_MENU},
-		{SNES_SELECT_MASK, RG_KEY_SELECT, RG_KEY_MENU},
+		{SNES_X_MASK, RG_KEY_X, 0},
+		{SNES_Y_MASK, RG_KEY_Y, 0},
+		{SNES_TL_MASK, 0, 0},
+		{SNES_TR_MASK, 0, 0},
+		{SNES_START_MASK, RG_KEY_START, 0},
+		{SNES_SELECT_MASK, RG_KEY_SELECT, 0},
 		{SNES_UP_MASK, RG_KEY_UP, 0},
 		{SNES_DOWN_MASK, RG_KEY_DOWN, 0},
 		{SNES_LEFT_MASK, RG_KEY_LEFT, 0},
@@ -236,10 +236,10 @@ void S9xDeinitDisplay(void)
 
 uint32_t S9xReadJoypad(int32_t port)
 {
-    if (port != 0)
+    if (port < 0 || port > 1)
         return 0;
 
-    uint32_t joystick = rg_input_read_gamepad();
+    uint32_t joystick = port == 0 ? rg_input_read_gamepad() : rg_input_read_gamepad2();
     uint32_t joypad = 0;
 
     for (int i = 0; i < RG_COUNT(keymap.keys); ++i)

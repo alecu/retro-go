@@ -70,7 +70,8 @@ typedef struct
     int level;  // 0-1
 } rg_keymap_serial_t;
 
-// #define RG_GAMEPAD_HOST_MAP {{}, ...} to use a latched host button byte
+// #define RG_GAMEPAD_HOST_MAP / RG_GAMEPAD_HOST_MAP2 {{}, ...} to map the
+// two normalized controller states from input protocol v2.
 typedef struct
 {
     rg_key_t key;
@@ -101,6 +102,7 @@ bool rg_input_key_is_present(rg_key_t mask);
 bool rg_input_key_is_pressed(rg_key_t mask);
 bool rg_input_wait_for_key(rg_key_t mask, bool pressed, int timeout_ms);
 uint32_t rg_input_read_gamepad(void);
+uint32_t rg_input_read_gamepad2(void);
 rg_battery_t rg_input_read_battery(void);
 bool rg_input_read_gamepad_raw(uint32_t *out);
 bool rg_input_read_battery_raw(rg_battery_t *out);
