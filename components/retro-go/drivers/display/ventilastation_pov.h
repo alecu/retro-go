@@ -30,6 +30,11 @@ void rg_vs_pov_init(void);
 // Updates the hardware SPI path.
 void rg_vs_pov_submit_surface(const rg_surface_t *surface);
 
+// Freeze the most recently submitted frame and black its LEDs from the outer
+// edge to the centre over duration_ms.  This is used immediately before a
+// native app returns to the MicroPython launcher.
+void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms);
+
 // Legacy: explicit 32-bit palette override. Optional; rg_vs_pov_submit_surface()
 // reads the palette from the surface automatically.
 void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count);

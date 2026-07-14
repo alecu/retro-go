@@ -529,6 +529,12 @@ void rg_display_submit(const rg_surface_t *update, uint32_t flags)
     counters.totalFrames++;
 }
 
+void rg_display_fade_last_frame_to_black(uint32_t duration_ms)
+{
+    if (rg_vs_pov_enabled())
+        rg_vs_pov_fade_last_frame_to_black(duration_ms);
+}
+
 bool rg_display_sync(bool block)
 {
 #if RG_DISPLAY_HAS_LCD

@@ -109,6 +109,10 @@ bool rg_display_sync(bool block);
 void rg_display_force_redraw(void);
 void rg_display_submit(const rg_surface_t *update, uint32_t flags);
 
+// Finish the current native POV frame with an outer-to-centre blackout.  It is
+// a no-op on non-POV targets.
+void rg_display_fade_last_frame_to_black(uint32_t duration_ms);
+
 rg_display_counters_t rg_display_get_counters(void);
 const rg_display_t *rg_display_get_info(void);
 int rg_display_get_width(void);

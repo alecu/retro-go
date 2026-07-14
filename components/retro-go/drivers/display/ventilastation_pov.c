@@ -22,6 +22,8 @@
 #define RG_VS_PIXELS 54
 #define RG_VS_FASTEST_CREDIBLE_TURN_US 10000
 #define RG_VS_TAU 6.28318530717958647692
+#define RG_VS_APA102_BLACK 0x000000e0
+#define RG_VS_EXIT_PRESENT_TIMEOUT_US 150000
 
 // Base rotation offset (columns, 256 = one full turn): compensates for the
 // quarter-turn difference between the board's angle-0 ray and the screen mapping.
@@ -50,6 +52,14 @@ static int buf_size = 0;
 static int screen_width = 0;
 static int screen_height = 0;
 static int last_column = 0;
+
+// The exit transition runs on the game task while the LED task keeps scanning
+// the last copied surface on core 1.  The atomic flag rejects any later
+// surface submission, so the visible image remains frozen during the sweep.
+static bool vs_exit_fade_active = false;
+static uint8_t vs_exit_black_outer_leds = 0;
+static uint32_t vs_exit_fade_generation = 0;
+static uint32_t vs_exit_presented_generation = 0;
 
 // True while framebuffers are being (re)allocated or the projection table is being rebuilt.
 // gpu_step() skips rendering while this is set. Initially true so the display task waits
@@ -92,7 +102,15 @@ static void vs_setup_projection_table(void) {
 }
 
 static void project_angle(int angle, uint32_t row[RG_VS_PIXELS]) {
+    uint8_t black_outer_leds = __atomic_load_n(
+        &vs_exit_black_outer_leds, __ATOMIC_ACQUIRE);
     for (int led = 0; led < RG_VS_PIXELS; led++) {
+        // LED zero is the centre of the projected frame, so blackening the
+        // highest indexes first visibly moves from the outside toward it.
+        if (led >= RG_VS_PIXELS - black_outer_leds) {
+            row[led] = RG_VS_APA102_BLACK;
+            continue;
+        }
         uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
         int x = ((pos >> 8) & 0xff) - 128 + screen_width / 2;
         int y = (pos & 0xff) - 128 + screen_height / 2;
@@ -195,12 +213,17 @@ static void gpu_step(void) {
     int64_t now = rg_system_timer();
     uint32_t column = ((now - last_turn) * RG_VS_COLUMNS / last_turn_duration) % RG_VS_COLUMNS;
     if (column != last_column) {
+        uint32_t fade_generation = __atomic_load_n(
+            &vs_exit_fade_generation, __ATOMIC_ACQUIRE);
         project_angle((column + RG_VS_COLUMNS / 2) % RG_VS_COLUMNS, extra_buf);
         for (int n = 0; n < RG_VS_PIXELS; n++) {
             pixels0[n] = extra_buf[RG_VS_PIXELS - 1 - n];
         }
         project_angle(column, pixels1);
         spi_write(spi_buf, buf_size);
+        __atomic_store_n(&vs_exit_presented_generation,
+                         fade_generation,
+                         __ATOMIC_RELEASE);
         last_column = column;
     }
 }
@@ -260,6 +283,8 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count)
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface)
 {
+    if (__atomic_load_n(&vs_exit_fade_active, __ATOMIC_ACQUIRE))
+        return;
     if (!surface || !surface->data)
         return;
     // (Re)allocate framebuffers and rebuild projection table when dimensions change.
@@ -355,6 +380,38 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
     }
 }
 
+void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms)
+{
+    if (rebuilding || (!vs_data && !vs_data_rgb))
+        return;
+
+    __atomic_store_n(&vs_exit_fade_active, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&vs_exit_black_outer_leds, 0, __ATOMIC_RELEASE);
+
+    int64_t started = rg_system_timer();
+    int64_t duration_us = (int64_t)duration_ms * 1000;
+    while (duration_us > 0) {
+        int64_t elapsed = rg_system_timer() - started;
+        if (elapsed >= duration_us)
+            break;
+        uint32_t black_leds = (uint32_t)(elapsed * RG_VS_PIXELS / duration_us);
+        __atomic_store_n(&vs_exit_black_outer_leds, black_leds, __ATOMIC_RELEASE);
+        // Yield to the core-1 SPI task while keeping the game loop stopped.
+        rg_task_delay(5);
+    }
+
+    __atomic_store_n(&vs_exit_black_outer_leds, RG_VS_PIXELS, __ATOMIC_RELEASE);
+    uint32_t generation = __atomic_add_fetch(
+        &vs_exit_fade_generation, 1, __ATOMIC_ACQ_REL);
+    int64_t deadline = rg_system_timer() + RG_VS_EXIT_PRESENT_TIMEOUT_US;
+    // Do not reset until the display task has sent the black centre LED at
+    // least once.  A stopped rotor must not make the exit path hang forever.
+    while (__atomic_load_n(&vs_exit_presented_generation, __ATOMIC_ACQUIRE) != generation
+           && rg_system_timer() < deadline) {
+        rg_task_delay(1);
+    }
+}
+
 #else
 
 bool rg_vs_pov_enabled(void) {
@@ -371,6 +428,10 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count) {
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface) {
     (void)surface;
+}
+
+void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms) {
+    (void)duration_ms;
 }
 
 #endif
