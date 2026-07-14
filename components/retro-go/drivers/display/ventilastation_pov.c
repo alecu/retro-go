@@ -23,7 +23,6 @@
 #define RG_VS_FASTEST_CREDIBLE_TURN_US 10000
 #define RG_VS_TAU 6.28318530717958647692
 #define RG_VS_APA102_BLACK 0x000000e0
-#define RG_VS_EXIT_PRESENT_TIMEOUT_US 150000
 
 // Base rotation offset (columns, 256 = one full turn): compensates for the
 // quarter-turn difference between the board's angle-0 ray and the screen mapping.
@@ -403,11 +402,9 @@ void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms)
     __atomic_store_n(&vs_exit_black_outer_leds, RG_VS_PIXELS, __ATOMIC_RELEASE);
     uint32_t generation = __atomic_add_fetch(
         &vs_exit_fade_generation, 1, __ATOMIC_ACQ_REL);
-    int64_t deadline = rg_system_timer() + RG_VS_EXIT_PRESENT_TIMEOUT_US;
     // Do not reset until the display task has sent the black centre LED at
-    // least once.  A stopped rotor must not make the exit path hang forever.
-    while (__atomic_load_n(&vs_exit_presented_generation, __ATOMIC_ACQUIRE) != generation
-           && rg_system_timer() < deadline) {
+    // least once.
+    while (__atomic_load_n(&vs_exit_presented_generation, __ATOMIC_ACQUIRE) != generation) {
         rg_task_delay(1);
     }
 }
