@@ -26,8 +26,8 @@ void app_main(void)
 
     // The retro-go launcher is disabled at the POV display's resolution, so we
     // are booted directly from MicroPython with no bootArgs. Read which system
-    // to run (-> configNs) and the ROM path (-> romPath) from NVS namespace
-    // "voom_emu" (written by native_apps.py just before launch).
+    // to run (-> configNs) and the ROM path (-> romPath) from the common native
+    // launch namespace written by native_apps.py just before launch.
     {
         esp_err_t err = nvs_flash_init();
         if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -36,18 +36,28 @@ void app_main(void)
         }
         if (err == ESP_OK) {
             nvs_handle_t h;
-            if (nvs_open("voom_emu", NVS_READONLY, &h) == ESP_OK) {
+            if (nvs_open("vs_native", NVS_READONLY, &h) == ESP_OK) {
+                static char vs_app[16];
                 static char vs_system[16];
                 static char vs_rom[256];
-                size_t len = sizeof(vs_system) - 1;
-                if (nvs_get_blob(h, "system", vs_system, &len) == ESP_OK) {
-                    vs_system[len] = '\0';
-                    app->configNs = vs_system;
+                memset(vs_app, 0, sizeof(vs_app));
+                size_t len = sizeof(vs_app) - 1;
+                if (nvs_get_blob(h, "app", vs_app, &len) == ESP_OK) {
+                    vs_app[len] = '\0';
                 }
-                len = sizeof(vs_rom) - 1;
-                if (nvs_get_blob(h, "rom", vs_rom, &len) == ESP_OK) {
-                    vs_rom[len] = '\0';
-                    app->romPath = vs_rom;
+                if (strcmp(vs_app, "retro-core") == 0) {
+                    len = sizeof(vs_system) - 1;
+                    if (nvs_get_blob(h, "system", vs_system, &len) == ESP_OK) {
+                        vs_system[len] = '\0';
+                        app->configNs = vs_system;
+                    }
+                    len = sizeof(vs_rom) - 1;
+                    if (nvs_get_blob(h, "rom", vs_rom, &len) == ESP_OK) {
+                        vs_rom[len] = '\0';
+                        app->romPath = vs_rom;
+                    }
+                } else {
+                    RG_LOGW("Ignoring native launch payload for '%s'", vs_app);
                 }
                 nvs_close(h);
             }

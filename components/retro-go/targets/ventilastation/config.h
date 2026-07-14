@@ -1,9 +1,12 @@
 // Target definition
 #define RG_TARGET_NAME             "VENTILASTATION"
 
-// Return to MicroPython (factory partition) from prboom-go menu
-#define RG_APP_LAUNCHER            "factory"
+// Every native Retro-Go app returns to the normal MicroPython launcher.  The
+// factory partition is recovery-only and must never become the normal exit
+// path.
+#define RG_APP_LAUNCHER            "micropython"
 #define RG_APP_FACTORY             "factory"
+#define RG_VS_RETURN_PARTITION     "micropython"
 
 // Storage: no SD card — use the LittleFS VFS partition already mounted at /vfs by prboom-go
 #define RG_STORAGE_ROOT             "/vfs"

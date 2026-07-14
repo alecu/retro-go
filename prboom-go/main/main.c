@@ -406,15 +406,15 @@ void app_main()
         .options = &options_handler,
     };
 
-    // Reset OTA boot target to MicroPython BEFORE anything that can crash.
-    // If rg_system_init() panics (missing SD, display fault, etc.) the next
-    // reboot must return to MicroPython, not loop back into prboom-go.
+    // Reset OTA boot target to the normal MicroPython launcher BEFORE anything
+    // that can crash. If rg_system_init() panics (missing VFS, display fault,
+    // etc.) the next reboot must not loop back into prboom-go.
 #ifdef ESP_PLATFORM
     {
-        const esp_partition_t *factory = esp_partition_find_first(
-            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-        if (factory)
-            esp_ota_set_boot_partition(factory);
+        const esp_partition_t *micropython = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, "micropython");
+        if (micropython)
+            esp_ota_set_boot_partition(micropython);
     }
 #endif
 

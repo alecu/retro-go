@@ -25,3 +25,11 @@ managed_components
 roms/md/*
 roms/nes/*
 roms/sms/*
+roms/gb/*
+roms/msx/*
+roms/bios/msx/*
+!roms/nes/README.md
+!roms/sms/README.md
+!roms/gb/README.md
+!roms/msx/README.md
+!roms/bios/msx/README.md

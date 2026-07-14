@@ -1,6 +1,10 @@
 #include <rg_system.h>
 #include <string.h>
 
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_littlefs.h>
+
 #define AUDIO_SAMPLE_RATE (32000)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
 
@@ -62,6 +66,55 @@ static const char *BiosFiles[] = {
     // "PAINTER.ROM",
     // "KANJI.ROM",
 };
+
+static void mount_shared_vfs(void)
+{
+    esp_vfs_littlefs_conf_t lfs_conf = {
+        .base_path = "/vfs",
+        .partition_label = "vfs",
+        .format_if_mount_failed = false,
+        .read_only = false,
+    };
+    esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+    if (lfs_err != ESP_OK)
+        RG_LOGW("VFS LittleFS mount failed (%d)", lfs_err);
+}
+
+static void load_native_launch_rom(rg_app_t *native_app)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK)
+        return;
+
+    nvs_handle_t handle;
+    if (nvs_open("vs_native", NVS_READONLY, &handle) != ESP_OK)
+        return;
+
+    static char requested_app[16];
+    static char requested_rom[256];
+    memset(requested_app, 0, sizeof(requested_app));
+    size_t len = sizeof(requested_app) - 1;
+    if (nvs_get_blob(handle, "app", requested_app, &len) != ESP_OK) {
+        nvs_close(handle);
+        return;
+    }
+    requested_app[len] = '\0';
+    if (strcmp(requested_app, "fmsx") != 0) {
+        nvs_close(handle);
+        return;
+    }
+
+    len = sizeof(requested_rom) - 1;
+    if (nvs_get_blob(handle, "rom", requested_rom, &len) == ESP_OK) {
+        requested_rom[len] = '\0';
+        native_app->romPath = requested_rom;
+    }
+    nvs_close(handle);
+}
 
 static inline void SubmitFrame(void)
 {
@@ -429,6 +482,14 @@ void app_main(void)
     };
 
     app = rg_system_init(AUDIO_SAMPLE_RATE, &handlers, NULL);
+    mount_shared_vfs();
+    load_native_launch_rom(app);
+
+    if (!app->romPath || !app->romPath[0]) {
+        RG_LOGW("No MSX ROM selected; returning to MicroPython");
+        rg_system_exit();
+    }
+
     // This is probably not right, but the emulator outputs 440 samples per frame??
     rg_system_set_tick_rate(55);
 
