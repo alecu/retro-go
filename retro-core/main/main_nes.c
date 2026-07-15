@@ -19,6 +19,21 @@ static const char *SETTING_PALETTE = "palette";
 static const char *SETTING_SPRITELIMIT = "spritelimit";
 // --- MAIN
 
+static int nes_buttons(uint32_t joystick)
+{
+    int buttons = 0;
+    if (joystick & RG_KEY_START) buttons |= NES_PAD_START;
+    if (joystick & RG_KEY_SELECT) buttons |= NES_PAD_SELECT;
+    if (joystick & RG_KEY_UP)     buttons |= NES_PAD_UP;
+    if (joystick & RG_KEY_RIGHT)  buttons |= NES_PAD_RIGHT;
+    if (joystick & RG_KEY_DOWN)   buttons |= NES_PAD_DOWN;
+    if (joystick & RG_KEY_LEFT)   buttons |= NES_PAD_LEFT;
+    // NES has two face buttons: preserve the additional ABXY inputs as the
+    // natural A/X and B/Y aliases rather than dropping the second pair.
+    if (joystick & (RG_KEY_A | RG_KEY_X)) buttons |= NES_PAD_A;
+    if (joystick & (RG_KEY_B | RG_KEY_Y)) buttons |= NES_PAD_B;
+    return buttons;
+}
 
 static void event_handler(int event, void *arg)
 {
@@ -267,6 +282,7 @@ void nes_main(void)
     while (true)
     {
         uint32_t joystick = rg_input_read_gamepad();
+        uint32_t joystick2 = rg_input_read_gamepad2();
 
         if (joystick & (RG_KEY_MENU|RG_KEY_OPTION))
         {
@@ -278,16 +294,7 @@ void nes_main(void)
 
         int64_t startTime = rg_system_timer();
         bool drawFrame = !skipFrames && !nsfPlayer;
-        int buttons = 0;
-
-        if (joystick & RG_KEY_START)  buttons |= NES_PAD_START;
-        if (joystick & RG_KEY_SELECT) buttons |= NES_PAD_SELECT;
-        if (joystick & RG_KEY_UP)     buttons |= NES_PAD_UP;
-        if (joystick & RG_KEY_RIGHT)  buttons |= NES_PAD_RIGHT;
-        if (joystick & RG_KEY_DOWN)   buttons |= NES_PAD_DOWN;
-        if (joystick & RG_KEY_LEFT)   buttons |= NES_PAD_LEFT;
-        if (joystick & RG_KEY_A)      buttons |= NES_PAD_A;
-        if (joystick & RG_KEY_B)      buttons |= NES_PAD_B;
+        int buttons = nes_buttons(joystick);
 
         if (drawFrame)
         {
@@ -296,6 +303,7 @@ void nes_main(void)
         }
 
         input_update(0, buttons);
+        input_update(1, nes_buttons(joystick2));
         nes_emulate(drawFrame);
 
         // Tick before submitting audio/syncing

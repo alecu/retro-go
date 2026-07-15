@@ -16,6 +16,19 @@ const rg_keyboard_layout_t coleco_keyboard = {
 static const char *SETTING_PALETTE = "palette";
 // --- MAIN
 
+static uint32_t sms_buttons(uint32_t joystick)
+{
+    uint32_t buttons = 0;
+    if (joystick & RG_KEY_UP)    buttons |= INPUT_UP;
+    if (joystick & RG_KEY_DOWN)  buttons |= INPUT_DOWN;
+    if (joystick & RG_KEY_LEFT)  buttons |= INPUT_LEFT;
+    if (joystick & RG_KEY_RIGHT) buttons |= INPUT_RIGHT;
+    // SMS, Game Gear, and Coleco expose two fire buttons.  Retain all four
+    // host face buttons by making X/Y aliases for A/B.
+    if (joystick & (RG_KEY_A | RG_KEY_X)) buttons |= INPUT_BUTTON2;
+    if (joystick & (RG_KEY_B | RG_KEY_Y)) buttons |= INPUT_BUTTON1;
+    return buttons;
+}
 
 static void event_handler(int event, void *arg)
 {
@@ -174,6 +187,7 @@ void sms_main(void)
     {
         const int64_t startTime = rg_system_timer();
         uint32_t joystick = rg_input_read_gamepad();
+        uint32_t joystick2 = rg_input_read_gamepad2();
         bool drawFrame = !skipFrames;
         bool slowFrame = false;
 
@@ -190,21 +204,17 @@ void sms_main(void)
         input.pad[1] = 0x00;
         input.system = 0x00;
 
-        if (joystick & RG_KEY_UP)    input.pad[0] |= INPUT_UP;
-        if (joystick & RG_KEY_DOWN)  input.pad[0] |= INPUT_DOWN;
-        if (joystick & RG_KEY_LEFT)  input.pad[0] |= INPUT_LEFT;
-        if (joystick & RG_KEY_RIGHT) input.pad[0] |= INPUT_RIGHT;
-        if (joystick & RG_KEY_A)     input.pad[0] |= INPUT_BUTTON2;
-        if (joystick & RG_KEY_B)     input.pad[0] |= INPUT_BUTTON1;
+        input.pad[0] = sms_buttons(joystick);
+        input.pad[1] = sms_buttons(joystick2);
 
         if (IS_SMS)
         {
-            if (joystick & RG_KEY_START)  input.system |= INPUT_PAUSE;
+            if ((joystick | joystick2) & RG_KEY_START) input.system |= INPUT_PAUSE;
             if (joystick & RG_KEY_SELECT) input.system |= INPUT_START;
         }
         else if (IS_GG)
         {
-            if (joystick & RG_KEY_START)  input.system |= INPUT_START;
+            if ((joystick | joystick2) & RG_KEY_START) input.system |= INPUT_START;
             if (joystick & RG_KEY_SELECT) input.system |= INPUT_PAUSE;
         }
         else // Coleco

@@ -47,13 +47,19 @@ static rg_keymap_serial_t keymap_serial[] = RG_GAMEPAD_SERIAL_MAP;
 #endif
 #ifdef RG_GAMEPAD_HOST_MAP
 static rg_keymap_host_t keymap_host[] = RG_GAMEPAD_HOST_MAP;
-static uint8_t host_buttons = 0;
+static uint32_t host_buttons = 0;
+#endif
+#ifdef RG_GAMEPAD_HOST_MAP2
+static rg_keymap_host_t keymap_host2[] = RG_GAMEPAD_HOST_MAP2;
+static uint32_t host_buttons2 = 0;
 #endif
 #ifdef RG_GAMEPAD_VIRT_MAP
 static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
 #endif
 static bool input_task_running = false;
 static uint32_t gamepad_state = -1; // _Atomic
+static uint32_t gamepad_state2 = 0; // _Atomic; second host controller only
+static uint32_t gamepad2_raw = 0;
 static uint32_t gamepad_mapped = 0;
 static rg_battery_t battery_state = {0};
 
@@ -218,14 +224,21 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
     if (!vs_host_bridge_connected())
     {
         host_buttons = 0;
+#ifdef RG_GAMEPAD_HOST_MAP2
+        host_buttons2 = 0;
+#endif
     }
     else
     {
         if (latest_buttons >= 0)
-            host_buttons = (uint8_t)latest_buttons;
-        // BUTTON_D travels as extra bit 0 in protocol v2, not on the wire
-        // byte itself -- mirror it into bit 7 so RG_KEY_START keeps working.
-        host_buttons = (host_buttons & 0x7F) | ((vs_host_bridge_get_extra() & 0x01) << 7);
+            host_buttons = (uint32_t)latest_buttons & 0x7F;
+        // Extra bits carry both controllers' Y/Start/Back inputs.  Preserve
+        // them outside the two joystick bytes rather than overloading joy1.
+        host_buttons |= (uint32_t)vs_host_bridge_get_extra() << 16;
+#ifdef RG_GAMEPAD_HOST_MAP2
+        host_buttons2 = ((uint32_t)vs_host_bridge_get_joy2() << 8)
+                      | ((uint32_t)vs_host_bridge_get_extra() << 16);
+#endif
     }
     for (size_t i = 0; i < RG_COUNT(keymap_host); ++i)
     {
@@ -233,6 +246,18 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
         if (host_buttons & mapping->mask)
             state |= mapping->key;
     }
+#endif
+
+#if defined(RG_GAMEPAD_HOST_MAP2)
+    gamepad2_raw = 0;
+    for (size_t i = 0; i < RG_COUNT(keymap_host2); ++i)
+    {
+        const rg_keymap_host_t *mapping = &keymap_host2[i];
+        if (host_buttons2 & mapping->mask)
+            gamepad2_raw |= mapping->key;
+    }
+#else
+    gamepad2_raw = 0;
 #endif
 
 #if defined(RG_GAMEPAD_VIRT_MAP)
@@ -251,12 +276,15 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
 static void input_task(void *arg)
 {
     uint8_t debounce[RG_KEY_COUNT];
+    uint8_t debounce2[RG_KEY_COUNT];
     uint32_t local_gamepad_state = 0;
+    uint32_t local_gamepad_state2 = 0;
     uint32_t state;
     int64_t next_battery_update = 0;
 
     // Start the task with debounce history full to allow a button held during boot to be detected
     memset(debounce, 0xFF, sizeof(debounce));
+    memset(debounce2, 0xFF, sizeof(debounce2));
     input_task_running = true;
 
     while (input_task_running)
@@ -278,6 +306,18 @@ static void input_task(void *arg)
                 }
             }
             gamepad_state = local_gamepad_state;
+
+            for (int i = 0; i < RG_KEY_COUNT; ++i)
+            {
+                uint32_t val = ((debounce2[i] << 1) | ((gamepad2_raw >> i) & 1));
+                debounce2[i] = val & 0xFF;
+
+                if ((val & ((1 << RG_GAMEPAD_DEBOUNCE_PRESS) - 1)) == ((1 << RG_GAMEPAD_DEBOUNCE_PRESS) - 1))
+                    local_gamepad_state2 |= (1 << i);
+                else if ((val & ((1 << RG_GAMEPAD_DEBOUNCE_RELEASE) - 1)) == 0)
+                    local_gamepad_state2 &= ~(1 << i);
+            }
+            gamepad_state2 = local_gamepad_state2;
         }
 
         if (rg_system_timer() >= next_battery_update)
@@ -299,6 +339,7 @@ static void input_task(void *arg)
 
     input_task_running = false;
     gamepad_state = -1;
+    gamepad_state2 = 0;
 }
 
 void rg_input_init(void)
@@ -373,6 +414,9 @@ void rg_input_init(void)
 #if defined(RG_GAMEPAD_HOST_MAP)
     RG_LOGI("Initializing HOST gamepad driver...");
     host_buttons = 0;
+#ifdef RG_GAMEPAD_HOST_MAP2
+    host_buttons2 = 0;
+#endif
     vs_host_bridge_init();
     UPDATE_GLOBAL_MAP(keymap_host);
 #endif
@@ -430,6 +474,11 @@ uint32_t rg_input_read_gamepad(void)
     SDL_PumpEvents();
 #endif
     return gamepad_state;
+}
+
+uint32_t rg_input_read_gamepad2(void)
+{
+    return gamepad_state2;
 }
 
 bool rg_input_key_is_pressed(rg_key_t mask)

@@ -1,6 +1,10 @@
 #include <rg_system.h>
 #include <string.h>
 
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_littlefs.h>
+
 #define AUDIO_SAMPLE_RATE (32000)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
 
@@ -36,6 +40,20 @@ static uint16_t *XBuf;
 
 #include <fmsx.h>
 
+static unsigned int msx_joystick(uint32_t joystick)
+{
+    unsigned int state = 0;
+    if (joystick & RG_KEY_LEFT)  state |= JST_LEFT;
+    if (joystick & RG_KEY_RIGHT) state |= JST_RIGHT;
+    if (joystick & RG_KEY_UP)    state |= JST_UP;
+    if (joystick & RG_KEY_DOWN)  state |= JST_DOWN;
+    // MSX joysticks have two fire signals.  A/X and B/Y are their respective
+    // aliases so all four v2 face buttons remain useful on both ports.
+    if (joystick & (RG_KEY_A | RG_KEY_X)) state |= JST_FIREA;
+    if (joystick & (RG_KEY_B | RG_KEY_Y)) state |= JST_FIREB;
+    return state;
+}
+
 static Image NormScreen;
 const char *Title = "fMSX 6.0";
 const char *Disks[2][MAXDISKS + 1];
@@ -63,6 +81,55 @@ static const char *BiosFiles[] = {
     // "KANJI.ROM",
 };
 
+static void mount_shared_vfs(void)
+{
+    esp_vfs_littlefs_conf_t lfs_conf = {
+        .base_path = "/vfs",
+        .partition_label = "vfs",
+        .format_if_mount_failed = false,
+        .read_only = false,
+    };
+    esp_err_t lfs_err = esp_vfs_littlefs_register(&lfs_conf);
+    if (lfs_err != ESP_OK)
+        RG_LOGW("VFS LittleFS mount failed (%d)", lfs_err);
+}
+
+static void load_native_launch_rom(rg_app_t *native_app)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK)
+        return;
+
+    nvs_handle_t handle;
+    if (nvs_open("vs_native", NVS_READONLY, &handle) != ESP_OK)
+        return;
+
+    static char requested_app[16];
+    static char requested_rom[256];
+    memset(requested_app, 0, sizeof(requested_app));
+    size_t len = sizeof(requested_app) - 1;
+    if (nvs_get_blob(handle, "app", requested_app, &len) != ESP_OK) {
+        nvs_close(handle);
+        return;
+    }
+    requested_app[len] = '\0';
+    if (strcmp(requested_app, "fmsx") != 0) {
+        nvs_close(handle);
+        return;
+    }
+
+    len = sizeof(requested_rom) - 1;
+    if (nvs_get_blob(handle, "rom", requested_rom, &len) == ESP_OK) {
+        requested_rom[len] = '\0';
+        native_app->romPath = requested_rom;
+    }
+    nvs_close(handle);
+}
+
 static inline void SubmitFrame(void)
 {
     int crop_v = CropPicture ? (ScanLines212 ? 8 : 18) : 0;
@@ -75,9 +142,11 @@ int ProcessEvents(int Wait)
 {
     for (int i = 0; i < 16; ++i)
         KeyState[i] = 0xFF;
-    JoyState = 0;
-
     uint32_t joystick = rg_input_read_gamepad();
+    uint32_t joystick2 = rg_input_read_gamepad2();
+    // fMSX packs its two joystick ports into the low and high bytes.
+    // Player 2 remains a joystick even while player 1 uses keyboard mode.
+    JoyState = msx_joystick(joystick2) << 8;
 
     if (joystick == RG_KEY_MENU)
     {
@@ -175,18 +244,7 @@ int ProcessEvents(int Wait)
     }
     else
     {
-        if (joystick & RG_KEY_LEFT)
-            JoyState |= JST_LEFT;
-        if (joystick & RG_KEY_RIGHT)
-            JoyState |= JST_RIGHT;
-        if (joystick & RG_KEY_UP)
-            JoyState |= JST_UP;
-        if (joystick & RG_KEY_DOWN)
-            JoyState |= JST_DOWN;
-        if (joystick & RG_KEY_A)
-            JoyState |= JST_FIREA;
-        if (joystick & RG_KEY_B)
-            JoyState |= JST_FIREB;
+        JoyState |= msx_joystick(joystick);
     }
 
     return 0;
@@ -429,6 +487,14 @@ void app_main(void)
     };
 
     app = rg_system_init(AUDIO_SAMPLE_RATE, &handlers, NULL);
+    mount_shared_vfs();
+    load_native_launch_rom(app);
+
+    if (!app->romPath || !app->romPath[0]) {
+        RG_LOGW("No MSX ROM selected; returning to MicroPython");
+        rg_system_exit();
+    }
+
     // This is probably not right, but the emulator outputs 440 samples per frame??
     rg_system_set_tick_rate(55);
 

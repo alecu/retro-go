@@ -24,6 +24,8 @@
 
 #define NoiseInitialState   0x8000  /* Initial state of shift register */
 #define PSG_CUTOFF          0x6     /* Value below which PSG does not output */
+/* IntermediatePos is INT32. LONG_MIN is 64-bit on LP64 host builds. */
+#define INTERMEDIATE_POS_NONE INT_MIN
 
 /* These values are taken from a real SMS2's output */
 static const int PSGVolumeValues[2][16] = {
@@ -62,7 +64,7 @@ void SN76489_Reset(int which)
         p->ToneFreqPos[i] = 1;
 
         /* Set intermediate positions to do-not-use value */
-        p->IntermediatePos[i] = LONG_MIN;
+        p->IntermediatePos[i] = INTERMEDIATE_POS_NONE;
     }
 
     p->LatchedRegister=0;
@@ -157,7 +159,7 @@ void SN76489_Update(int which, INT16 **buffer, int length)
     for(j = 0; j < length; j++)
     {
         for (i=0;i<=2;++i)
-            if (p->IntermediatePos[i]!=LONG_MIN)
+            if (p->IntermediatePos[i]!=INTERMEDIATE_POS_NONE)
                 p->Channels[i]=(p->Mute >> i & 0x1)*PSGVolumeValues[p->VolumeArray][p->Registers[2*i+1]]*p->IntermediatePos[i]/65536;
             else
                 p->Channels[i]=(p->Mute >> i & 0x1)*PSGVolumeValues[p->VolumeArray][p->Registers[2*i+1]]*p->ToneFreqPos[i];
@@ -200,10 +202,10 @@ void SN76489_Update(int which, INT16 **buffer, int length)
                     p->ToneFreqPos[i]=-p->ToneFreqPos[i]; /* Flip the flip-flop */
                 } else {
                     p->ToneFreqPos[i]=1;   /* stuck value */
-                    p->IntermediatePos[i]=LONG_MIN;
+                    p->IntermediatePos[i]=INTERMEDIATE_POS_NONE;
                 }
                 p->ToneFreqVals[i]+=p->Registers[i*2]*(p->NumClocksForSample/p->Registers[i*2]+1);
-            } else p->IntermediatePos[i]=LONG_MIN;
+            } else p->IntermediatePos[i]=INTERMEDIATE_POS_NONE;
         }
 
         /* Noise channel */

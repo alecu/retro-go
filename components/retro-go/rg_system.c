@@ -443,6 +443,22 @@ rg_app_t *rg_system_init(int sampleRate, const rg_handlers_t *handlers, void *_u
     #endif
     };
 
+    // Native apps are entered by selecting their OTA partition.  Set the next
+    // boot target back to MicroPython before display, storage, or emulator
+    // initialisation so an explicit exit, or a later restart after a fault,
+    // lands in the persistent launcher rather than looping this native app.
+#if defined(ESP_PLATFORM) && defined(RG_VS_RETURN_PARTITION)
+    const esp_partition_t *vs_return_partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, RG_VS_RETURN_PARTITION);
+    if (vs_return_partition != NULL) {
+        esp_err_t vs_return_err = esp_ota_set_boot_partition(vs_return_partition);
+        if (vs_return_err != ESP_OK)
+            RG_LOGW("Could not set native return partition (%d)", vs_return_err);
+    } else {
+        RG_LOGW("Native return partition '%s' not found", RG_VS_RETURN_PARTITION);
+    }
+#endif
+
     // Do this very early, may be needed to enable serial console
     platform_init();
 

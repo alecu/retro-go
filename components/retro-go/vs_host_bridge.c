@@ -4,8 +4,12 @@
 
 #if defined(ESP_PLATFORM) && defined(RG_VS_ENABLE_HOST_BRIDGE)
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include <nvs.h>
+#include "color_pipeline.h"
 #include "vs_board_config.h"
 
 // ---- Input protocol v2 byte-stream parser ----
@@ -32,10 +36,231 @@ static uint8_t vs_joy1 = 0;
 static uint8_t vs_joy2 = 0;
 static uint8_t vs_extra = 0;
 
+#define VS_POVCAL_NAMESPACE "voom_pov"
+#define VS_POVCAL_KEY "color_v1"
+#define VS_POVCAL_HEADER_BYTES 12
+#define VS_POVCAL_CONTROLS_BYTES 15
+#define VS_POVCAL_MATRIX_BYTES 18
+#define VS_POVCAL_LED_TRIMS (VS_POVCAL_HEADER_BYTES + VS_POVCAL_CONTROLS_BYTES + VS_POVCAL_MATRIX_BYTES)
+#define VS_POVCAL_SOURCE_EOTF VS_POVCAL_HEADER_BYTES
+#define VS_POVCAL_SOURCE_GAMMA (VS_POVCAL_SOURCE_EOTF + 1)
+#define VS_POVCAL_MASTER (VS_POVCAL_SOURCE_GAMMA + 2)
+#define VS_POVCAL_WHITE (VS_POVCAL_MASTER + 2)
+#define VS_POVCAL_RADIAL (VS_POVCAL_WHITE + 6)
+#define VS_POVCAL_GB_FLOOR (VS_POVCAL_RADIAL + 2)
+#define VS_POVCAL_GB_CEILING (VS_POVCAL_GB_FLOOR + 1)
+
+static uint8_t vs_povcal_profile[COLOR_PIPELINE_PROFILE_BYTES];
+static bool vs_povcal_loaded = false;
+
+static uint16_t vs_povcal_u16(const uint8_t *data, int offset)
+{
+    return (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+}
+
+static uint32_t vs_povcal_u32(const uint8_t *data, int offset)
+{
+    return (uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8)
+        | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24);
+}
+
+static void vs_povcal_put_u16(uint8_t *data, int offset, uint16_t value)
+{
+    data[offset] = value & 0xff;
+    data[offset + 1] = value >> 8;
+}
+
+static void vs_povcal_put_u32(uint8_t *data, int offset, uint32_t value)
+{
+    for (int index = 0; index < 4; index++)
+        data[offset + index] = (value >> (index * 8)) & 0xff;
+}
+
+static bool vs_povcal_load(void)
+{
+    nvs_handle_t nvs;
+    size_t length = sizeof(vs_povcal_profile);
+    if (nvs_open(VS_POVCAL_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
+        return false;
+    esp_err_t result = nvs_get_blob(nvs, VS_POVCAL_KEY, vs_povcal_profile, &length);
+    nvs_close(nvs);
+    if (result != ESP_OK || !color_pipeline_apply(vs_povcal_profile, length))
+        return false;
+    vs_povcal_loaded = true;
+    return true;
+}
+
+static bool vs_povcal_save(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(VS_POVCAL_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK)
+        return false;
+    esp_err_t result = nvs_set_blob(nvs, VS_POVCAL_KEY, vs_povcal_profile, sizeof(vs_povcal_profile));
+    if (result == ESP_OK)
+        result = nvs_commit(nvs);
+    nvs_close(nvs);
+    return result == ESP_OK;
+}
+
+static void vs_povcal_send_error(const char *code)
+{
+    char line[64];
+    uint32_t generation = vs_povcal_loaded ? vs_povcal_u32(vs_povcal_profile, 8) : 0;
+    snprintf(line, sizeof(line), "povcal_error %lu %s", (unsigned long)generation, code);
+    vs_host_bridge_send(line, NULL, 0);
+}
+
+static void vs_povcal_send_state(void)
+{
+    if (!vs_povcal_loaded && !vs_povcal_load()) {
+        vs_povcal_send_error("profile_unavailable");
+        return;
+    }
+    char line[80];
+    snprintf(line, sizeof(line), "povcal_state %d %lu %u", 1,
+             (unsigned long)vs_povcal_u32(vs_povcal_profile, 8),
+             (unsigned)sizeof(vs_povcal_profile));
+    vs_host_bridge_send(line, vs_povcal_profile, sizeof(vs_povcal_profile));
+}
+
+static bool vs_povcal_number(const char *value, int minimum, int maximum, int *out)
+{
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (end == value || *end != '\0' || parsed < minimum || parsed > maximum)
+        return false;
+    *out = (int)parsed;
+    return true;
+}
+
+static bool vs_povcal_apply_set(const char *command)
+{
+    if (!vs_povcal_loaded && !vs_povcal_load())
+        return false;
+    uint8_t candidate[COLOR_PIPELINE_PROFILE_BYTES];
+    memcpy(candidate, vs_povcal_profile, sizeof(candidate));
+    int a, b, c;
+    const char *value;
+
+    if (strcmp(command, "source_eotf srgb") == 0) {
+        candidate[VS_POVCAL_SOURCE_EOTF] = 0;
+    } else if (strncmp(command, "source_eotf power ", 18) == 0) {
+        value = command + 18;
+        if (!vs_povcal_number(value, 1000, 4000, &a)) return false;
+        candidate[VS_POVCAL_SOURCE_EOTF] = 1;
+        vs_povcal_put_u16(candidate, VS_POVCAL_SOURCE_GAMMA, a);
+    } else if (strncmp(command, "master ", 7) == 0) {
+        if (!vs_povcal_number(command + 7, 0, 4000, &a)) return false;
+        vs_povcal_put_u16(candidate, VS_POVCAL_MASTER, a);
+    } else if (sscanf(command, "white %d %d %d", &a, &b, &c) == 3) {
+        if (a < 0 || a > 4000 || b < 0 || b > 4000 || c < 0 || c > 4000) return false;
+        vs_povcal_put_u16(candidate, VS_POVCAL_WHITE, a);
+        vs_povcal_put_u16(candidate, VS_POVCAL_WHITE + 2, b);
+        vs_povcal_put_u16(candidate, VS_POVCAL_WHITE + 4, c);
+    } else if (strncmp(command, "radial_exponent ", 16) == 0) {
+        if (!vs_povcal_number(command + 16, 0, 4000, &a)) return false;
+        vs_povcal_put_u16(candidate, VS_POVCAL_RADIAL, a);
+    } else if (sscanf(command, "led_gain %d %d", &a, &b) == 2) {
+        if (a < 0 || a >= COLOR_PIPELINE_LEDS || b < 0 || b > 4096) return false;
+        vs_povcal_put_u16(candidate, VS_POVCAL_LED_TRIMS + a * 2, b);
+    } else if (strncmp(command, "gb_floor ", 9) == 0) {
+        if (!vs_povcal_number(command + 9, 0, 31, &a) || a > candidate[VS_POVCAL_GB_CEILING]) return false;
+        candidate[VS_POVCAL_GB_FLOOR] = a;
+    } else if (strncmp(command, "gb_ceiling ", 11) == 0) {
+        if (!vs_povcal_number(command + 11, 0, 31, &a) || a < candidate[VS_POVCAL_GB_FLOOR]) return false;
+        candidate[VS_POVCAL_GB_CEILING] = a;
+    } else {
+        return false;
+    }
+
+    vs_povcal_put_u32(candidate, 8, vs_povcal_u32(candidate, 8) + 1);
+    if (!color_pipeline_apply(candidate, sizeof(candidate)))
+        return false;
+    memcpy(vs_povcal_profile, candidate, sizeof(candidate));
+    return true;
+}
+
+static bool vs_povcal_apply_test(const char *command)
+{
+    int level = 255;
+    const char *level_at = strchr(command, ' ');
+    char name[16];
+    size_t name_len = level_at ? (size_t)(level_at - command) : strlen(command);
+    if (name_len == 0 || name_len >= sizeof(name)) return false;
+    memcpy(name, command, name_len);
+    name[name_len] = '\0';
+    if (level_at && !vs_povcal_number(level_at + 1, 0, 255, &level)) return false;
+    int pattern;
+    if (strcmp(name, "off") == 0) pattern = COLOR_TEST_OFF;
+    else if (strcmp(name, "gray") == 0) pattern = COLOR_TEST_GRAY;
+    else if (strcmp(name, "red") == 0) pattern = COLOR_TEST_RED;
+    else if (strcmp(name, "green") == 0) pattern = COLOR_TEST_GREEN;
+    else if (strcmp(name, "blue") == 0) pattern = COLOR_TEST_BLUE;
+    else if (strcmp(name, "white") == 0) pattern = COLOR_TEST_WHITE;
+    else if (strcmp(name, "radial") == 0) pattern = COLOR_TEST_RADIAL;
+    else return false;
+    return color_pipeline_set_test_pattern(pattern, level);
+}
+
 static void vs_handle_command(const char *cmd)
 {
-    if (strcmp(cmd, "reset") == 0)
+    if (strcmp(cmd, "povcal get") == 0) {
+        vs_povcal_send_state();
+        return;
+    }
+
+    if (strncmp(cmd, "povcal set ", 11) == 0) {
+        if (vs_povcal_apply_set(cmd + 11))
+            vs_povcal_send_state();
+        else
+            vs_povcal_send_error("invalid_value");
+        return;
+    }
+
+    if (strncmp(cmd, "povcal test ", 12) == 0) {
+        if (vs_povcal_apply_test(cmd + 12))
+            vs_povcal_send_state();
+        else
+            vs_povcal_send_error("invalid_test");
+        return;
+    }
+
+    if (strcmp(cmd, "povcal commit") == 0) {
+        if (vs_povcal_loaded && vs_povcal_save())
+            vs_povcal_send_state();
+        else
+            vs_povcal_send_error("nvs_write_failed");
+        return;
+    }
+
+    if (strcmp(cmd, "povcal revert") == 0) {
+        if (vs_povcal_load())
+            vs_povcal_send_state();
+        else
+            vs_povcal_send_error("profile_unavailable");
+        return;
+    }
+
+    if (strcmp(cmd, "povcal factory") == 0) {
+        uint32_t generation = vs_povcal_loaded ? vs_povcal_u32(vs_povcal_profile, 8) + 1 : 0;
+        if (color_pipeline_build_default(vs_povcal_profile, sizeof(vs_povcal_profile), generation)
+            && color_pipeline_apply(vs_povcal_profile, sizeof(vs_povcal_profile))) {
+            vs_povcal_loaded = true;
+            vs_povcal_send_state();
+        } else {
+            vs_povcal_send_error("factory_failed");
+        }
+        return;
+    }
+
+    // EXIT is the emulator's Home/Guide action.  Both it and RESET return to
+    // MicroPython, but first freeze the current game frame and sweep it black
+    // from the outer LEDs to the centre.  Blocking here stops every shared
+    // retro-core, fMSX, and prboom game before its partition restarts.
+    if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "exit") == 0)
     {
+        rg_audio_set_mute(true);
+        rg_display_fade_last_frame_to_black(500);
         rg_system_restart();
         return;
     }

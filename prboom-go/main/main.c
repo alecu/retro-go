@@ -44,6 +44,7 @@
 #include "drivers/display/ventilastation_pov.h"
 #include "host_comms.h"
 #include "voom_audio_bridge.h"
+#include "voom_base_feedback.h"
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
@@ -82,9 +83,14 @@ static const struct {int mask; int *key;} keymap[] = {
     {RG_KEY_RIGHT, &key_right},
     {RG_KEY_A, &key_fire},
     {RG_KEY_A, &key_enter},
+    {RG_KEY_X, &key_fire},
+    {RG_KEY_X, &key_enter},
     {RG_KEY_B, &key_speed},
     {RG_KEY_B, &key_strafe},
     {RG_KEY_B, &key_backspace},
+    {RG_KEY_Y, &key_speed},
+    {RG_KEY_Y, &key_strafe},
+    {RG_KEY_Y, &key_backspace},
     {RG_KEY_MENU, &key_escape},
     {RG_KEY_OPTION, &key_map},
     {RG_KEY_START, &key_use},
@@ -133,6 +139,8 @@ void I_FinishUpdate(void)
 {
     rg_display_submit(update, 0);
     rg_display_sync(true); // Wait for update->buffer to be released
+    voom_base_feedback_update(players[displayplayer].health,
+                              players[displayplayer].armorpoints);
 }
 
 bool I_StartDisplay(void)
@@ -153,6 +161,7 @@ void I_SetPalette(int pal)
     Z_Free(palette);
 
     uint32_t *palette32 = V_BuildPalette(pal, 32);
+    voom_base_feedback_set_palette_black(palette32[0]);
     rg_vs_pov_set_palette32(palette32, 256);
     Z_Free(palette32);
 
@@ -402,15 +411,15 @@ void app_main()
         .options = &options_handler,
     };
 
-    // Reset OTA boot target to MicroPython BEFORE anything that can crash.
-    // If rg_system_init() panics (missing SD, display fault, etc.) the next
-    // reboot must return to MicroPython, not loop back into prboom-go.
+    // Reset OTA boot target to the normal MicroPython launcher BEFORE anything
+    // that can crash. If rg_system_init() panics (missing VFS, display fault,
+    // etc.) the next reboot must not loop back into prboom-go.
 #ifdef ESP_PLATFORM
     {
-        const esp_partition_t *factory = esp_partition_find_first(
-            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-        if (factory)
-            esp_ota_set_boot_partition(factory);
+        const esp_partition_t *micropython = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, "micropython");
+        if (micropython)
+            esp_ota_set_boot_partition(micropython);
     }
 #endif
 
