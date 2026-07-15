@@ -33,3 +33,5 @@ roms/bios/msx/*
 !roms/gb/README.md
 !roms/msx/README.md
 !roms/bios/msx/README.md
+disabled.roms/*
+.DS_Store
