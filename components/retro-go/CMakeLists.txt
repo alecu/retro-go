@@ -51,6 +51,12 @@ component_compile_options(-DRG_PROJECT_APP="${RG_PROJECT_APP}")
 component_compile_options(-DRG_BUILD_INFO="${RG_BUILD_INFO}")
 component_compile_options(-DRG_BUILD_TIME=${RG_BUILD_TIME})
 
+# PROJECT_VER is ESP-IDF's own git-describe-based project version (see
+# $ENV{IDF_PATH}/tools/cmake/project.cmake, included via base.cmake) -- reuse
+# it as vs_host_bridge.c's RESYNC identification banner git hash rather than
+# adding a second git-invoking CMake step.
+component_compile_options(-DVS_ROTOR_GIT_HASH="${PROJECT_VER}")
+
 message(STATUS "RG_PROJECT_APP: ${RG_PROJECT_APP}")
 message(STATUS "RG_PROJECT_VER: ${RG_PROJECT_VER}")
 message(STATUS "RG_BUILD_INFO: ${RG_BUILD_INFO}")
