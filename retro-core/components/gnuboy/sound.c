@@ -4,6 +4,7 @@
 #include "sound.h"
 #include "hw.h"
 #include "tables.h"
+#include "emu_audio_bridge.h"
 
 #define S1 (snd.ch[0])
 #define S2 (snd.ch[1])
@@ -87,6 +88,23 @@ void gb_sound_reset(bool hard)
 	GB.audio.pos = 0;
 	sound_off();
 	R_NR52 = 0xF1;
+}
+
+void gb_sound_frame_reset(void)
+{
+	snd.frame_cycles = 0;
+}
+
+// Ventilastation: sample position within the current emu-audio frame, for
+// the register-write tap in gb_sound_write() below.
+static uint16_t emu_audio_gb_sample_idx(void)
+{
+	if (snd.rate <= 0)
+		return 0;
+	long idx = snd.frame_cycles / snd.rate;
+	if (idx < 0) idx = 0;
+	if (idx > 0xFFFF) idx = 0xFFFF;
+	return (uint16_t)idx;
 }
 
 void gb_sound_emulate(void)
@@ -253,6 +271,9 @@ void gb_sound_emulate(void)
 
 void gb_sound_write(byte r, byte b)
 {
+	if (r >= 0x10 && r <= 0x3F)
+		emu_audio_write((uint8_t)(EMU_OP_GB_BASE + (r - 0x10)), b, emu_audio_gb_sample_idx());
+
 	if (!(R_NR52 & 128) && r != RI_NR52)
 		return;
 

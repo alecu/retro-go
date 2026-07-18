@@ -5,6 +5,11 @@
 typedef struct
 {
 	int rate, cycles;
+	int frame_cycles; // Ventilastation: monotonic within an emu-audio frame,
+	                  // reset by gb_sound_frame_reset(); gives the audio
+	                  // bridge a stable sample position for register-write
+	                  // taps regardless of the sound buffer's own flush
+	                  // cadence (which doesn't line up with video frames).
 	byte wave[16];
 	struct {
 		unsigned on, pos;
@@ -20,4 +25,5 @@ void gb_sound_write(byte r, byte b);
 void gb_sound_dirty(void);
 void gb_sound_reset(bool hard);
 void gb_sound_emulate(void);
-#define gb_sound_advance(count) GB.snd->cycles += (count)
+void gb_sound_frame_reset(void);
+#define gb_sound_advance(count) do { GB.snd->cycles += (count); GB.snd->frame_cycles += (count); } while (0)

@@ -96,6 +96,20 @@ void Sync8910(register AY8910 *D,register byte Sync);
 /*************************************************************/
 void Loop8910(register AY8910 *D,int uSec);
 
+/** Ay8910EmuAudioFrameReset() *********************************/
+/** Ventilastation: reset the elapsed-samples counter Loop8910 **/
+/** accumulates for the emulator audio bridge's register-write **/
+/** taps. Call once per emu-audio frame (video frame).         **/
+/*************************************************************/
+void Ay8910EmuAudioFrameReset(void);
+
+/** Ay8910EmuAudioFrameSamples() ********************************/
+/** Ventilastation: how many samples' worth of time has elapsed **/
+/** since the last Ay8910EmuAudioFrameReset(), i.e. how many    **/
+/** samples this emu-audio frame represents.                    **/
+/*************************************************************/
+unsigned int Ay8910EmuAudioFrameSamples(void);
+
 #ifdef __cplusplus
 }
 #endif

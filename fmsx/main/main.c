@@ -4,6 +4,8 @@
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <esp_littlefs.h>
+#include "AY8910.h"
+#include "emu_audio_bridge.h"
 
 #define AUDIO_SAMPLE_RATE (32000)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
@@ -276,6 +278,10 @@ int InitMachine(void)
     InitSound(AUDIO_SAMPLE_RATE, 150);
     SetChannels(64, 0xFFFFFFFF);
 
+    // Ventilastation: only the always-present AY8910 PSG is bridged today;
+    // SCC/MSX-MUSIC (cartridge-dependent expansion audio) are not tapped.
+    emu_audio_begin("msx", NULL);
+
     RPLInit(SaveState, LoadState, MAX_STASIZE);
     RPLRecord(RPL_RESET);
     return 1;
@@ -310,6 +316,16 @@ void PutImage(void)
 
 unsigned int Joystick(void)
 {
+    // Ventilastation: Joystick() is called once per video frame (from
+    // LoopZ80() at ScanLine==192), making it a convenient boundary for the
+    // audio bridge even though it isn't scanline 0 -- the wire protocol
+    // doesn't require exact video-frame alignment, just a regular chunk
+    // boundary. Close out the frame that just finished before starting the
+    // next one's register-write log.
+    emu_audio_frame_end((uint16_t)Ay8910EmuAudioFrameSamples());
+    emu_audio_frame_begin();
+    Ay8910EmuAudioFrameReset();
+
     ProcessEvents(0);
     return JoyState;
 }
