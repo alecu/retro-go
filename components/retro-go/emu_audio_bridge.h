@@ -14,7 +14,13 @@
 // synthesizer and the device sends the register writes that drive it.
 //
 // Wire protocol (same "<line>\n" + binary framing as the rest of the link):
-//   achip <system>\n           once at app start: host resets its synth
+//   achip <system> [<nbytes>]\n [+ <nbytes> payload]
+//       once at app start: host resets its synth. The optional payload is
+//       the running ROM's filename (no path), used by cores whose fidelity
+//       needs the actual ROM bytes (e.g. NES DMC sample playback reads
+//       cartridge PRG-ROM) -- the host locates the same file from its own
+//       roms/ tree, which is the source the board's own ROMs were synced
+//       from. Omitted (no <nbytes>) for chips that need no ROM access.
 //   aframe <nbytes> <nsamples>\n + <nbytes> payload : one emulated video frame
 //   astop\n                    at app exit
 //
@@ -39,8 +45,10 @@
 #define EMU_OP_SMS_GGSTEREO 0x41
 
 // Announce the running emulator to the host and bring up the UART link.
-// `system` is a short token: "genesis", "nes", "lynx".
-void emu_audio_begin(const char *system);
+// `system` is a short token: "genesis", "sms-ntsc"/"sms-pal",
+// "nes-ntsc"/"nes-pal", "lynx". `rom_name` is the ROM's filename (no
+// directory), or NULL/empty if the host synth needs no ROM access.
+void emu_audio_begin(const char *system, const char *rom_name);
 
 // Tear down: tells the host to stop and flush its synth.
 void emu_audio_end(void);
