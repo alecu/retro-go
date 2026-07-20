@@ -998,10 +998,22 @@ void rg_system_vlog(int level, const char *context, const char *format, va_list 
             len = snprintf(buffer, sizeof(buffer), "[%s] ", levels[level]);
     }
 
+    // snprintf/vsnprintf return the length that *would* have been written,
+    // not clamped to the buffer size, so a long context or format argument
+    // (eg. a long file path) can push len past sizeof(buffer). Clamp after
+    // each call: leaving it unclamped made buffer[len++]/buffer[len] below
+    // write out of bounds and corrupt the stack (observed on hardware as a
+    // wild jump/InstrFetchProhibited crash from an otherwise-unrelated log
+    // call).
+    if (len >= sizeof(buffer))
+        len = sizeof(buffer) - 1;
+
     len += vsnprintf(buffer + len, sizeof(buffer) - len, format, va);
+    if (len >= sizeof(buffer))
+        len = sizeof(buffer) - 1;
 
     // Append a newline if needed only when possible
-    if (len > 0 && buffer[len - 1] != '\n')
+    if (len > 0 && buffer[len - 1] != '\n' && len < sizeof(buffer) - 1)
     {
         buffer[len++] = '\n';
         buffer[len] = 0;
