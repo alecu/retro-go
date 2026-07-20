@@ -12,7 +12,6 @@
 
 static rg_surface_t *updates[2];
 static rg_surface_t *currentUpdate;
-static rg_task_t *audioQueue;
 static rg_app_t *app;
 
 static int JoyState, LastKey, InMenu, InKeyboard;
@@ -408,10 +407,13 @@ unsigned int GetFreeAudio(void)
 
 void PlayAllSound(int uSec)
 {
-    int64_t start = rg_system_timer();
-    unsigned int samples = 2 * uSec * AUDIO_SAMPLE_RATE / 1000000;
-    rg_task_send(audioQueue, &(rg_task_msg_t){.dataInt = samples});
-    FrameStartTime += rg_system_timer() - start;
+    // No-op: the only consumer of this hook was the legacy software
+    // wavetable "Drum"/click channel, rendered to a 'Dummy' audio sink that
+    // discards the output (this board has no speaker/DAC) -- pure wasted
+    // synthesis work. Real audio (the AY8910/PSG chip) already bypasses
+    // this path entirely: Write8910() forwards register writes straight to
+    // emu_audio_write() synchronously, on the Z80 interpreter's own thread.
+    (void)uSec;
 }
 
 unsigned int WriteAudio(sample *Data, unsigned int Length)
@@ -471,17 +473,6 @@ static rg_gui_event_t input_select_cb(rg_gui_option_t *option, rg_gui_event_t ev
     }
     strcpy(option->value, KeyboardEmulation ? _("Keyboard") : _("Joystick"));
     return RG_DIALOG_VOID;
-}
-
-static void audioTask(void *arg)
-{
-    RG_LOGI("task started");
-    rg_task_msg_t msg;
-    while (rg_task_peek(&msg))
-    {
-        RenderAndPlayAudio(msg.dataInt);
-        rg_task_receive(&msg);
-    }
 }
 
 static void options_handler(rg_gui_option_t *dest)
@@ -555,8 +546,6 @@ void app_main(void)
         argv[argc++] = "-diska";
     }
     argv[argc++] = app->romPath;
-
-    audioQueue = rg_task_create("audioTask", &audioTask, NULL, 4096, RG_TASK_PRIORITY_2, 1);
 
     RG_LOGI("fMSX start");
     fmsx_main(argc, (char **)argv);
