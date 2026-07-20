@@ -315,7 +315,12 @@ rg_stat_t rg_storage_stat(const char *path)
 bool rg_storage_exists(const char *path)
 {
     CHECK_PATH(path);
-    return access(path, F_OK) == 0;
+    // Not access(path, F_OK): the LittleFS VFS driver (joltwallet/littlefs,
+    // used to mount Ventilastation's shared "vfs" partition) never
+    // implements esp_vfs_t.access_p, so access() always fails there
+    // regardless of whether the path exists. stat_p is implemented.
+    struct stat statbuf;
+    return stat(path, &statbuf) == 0;
 }
 
 bool rg_storage_scandir(const char *path, rg_scandir_cb_t *callback, void *arg, uint32_t flags)

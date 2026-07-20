@@ -8,13 +8,23 @@
 #define RG_APP_FACTORY             "factory"
 #define RG_VS_RETURN_PARTITION     "micropython"
 
-// Storage: no SD card — use the LittleFS VFS partition already mounted at /vfs by prboom-go
+// Storage: no SD card — every native app mounts the MicroPython/rotor
+// firmware's LittleFS2 "vfs" flash partition itself (see mount_shared_vfs()
+// in each app's main.c, eg. fmsx/main/main.c), called right after
+// rg_system_init() returns. Its partition table subtype says "fat" but the
+// actual content is LittleFS2 (written by build_micropython_fs.py) — do not
+// add RG_STORAGE_FLASH_PARTITION here (esp_vfs_fat_spiflash_mount), which
+// would either fail to mount it or, with format_if_mount_failed, silently
+// reformat/wipe it.
 #define RG_STORAGE_ROOT             "/vfs"
 // #define RG_STORAGE_SDSPI_HOST       SPI2_HOST
 // #define RG_STORAGE_SDSPI_SPEED      SDMMC_FREQ_DEFAULT
 // #define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
 // #define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
-// #define RG_STORAGE_FLASH_PARTITION  "vfs"
+
+// This project's roms/ tree nests bios/ under it (/roms/bios/<system>/...)
+// rather than retro-go's upstream convention of a sibling /retro-go/bios/.
+#define RG_BASE_PATH_BIOS          RG_STORAGE_ROOT "/roms/bios"
 
 // Audio
 #define RG_AUDIO_USE_INT_DAC        0   // 0 = Disable, 1 = GPIO25, 2 = GPIO26, 3 = Both
