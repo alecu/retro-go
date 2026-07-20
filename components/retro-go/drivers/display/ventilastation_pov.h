@@ -40,5 +40,20 @@ void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms);
 void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count);
 
 
+// Draws a title plus a short list of option lines directly in the POV's
+// native (angle, radius) address space, in a narrow wedge centred on the
+// bottom of the disc -- bypassing the Cartesian vs_data/project_angle
+// downsample entirely. That downsample is fine for game video but loses far
+// too much resolution for text (confirmed on hardware): mirrors how the
+// MicroPython ROM browser (system/launcher) keeps its own text legible by
+// addressing sprites directly in polar space instead of projecting a
+// Cartesian framebuffer. selected_index indexes into `lines` (not the
+// caller's full list) and may be -1 for "nothing highlighted".
+// Returns false if the POV driver isn't enabled.
+bool rg_vs_pov_draw_native_dialog(const char *title, const char *const *lines, int line_count, int selected_index);
+
+// Turns the native dialog overlay off, restoring the plain projected view.
+void rg_vs_pov_clear_native_dialog(void);
+
 // Register WiFi display bridge callbacks so the POV driver can forward frames
 // and palette to the desktop pyglet emulator. Pass NULLs to disable.
