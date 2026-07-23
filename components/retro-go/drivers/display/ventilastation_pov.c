@@ -46,20 +46,25 @@ static spi_device_handle_t spi_handle;
 static spi_transaction_t vs_spi_trans;
 static bool vs_spi_ongoing = false;
 static char *spi_buf = NULL;
-// Render targets for the two projection arms, kept separate from spi_buf
-// (the DMA source) so gpu_step() can render the current column while a
-// previous column is still transmitting -- see vsspi_write_queue().
-static uint32_t *draw_buf0 = NULL;
-static uint32_t *draw_buf1 = NULL;
 static uint32_t *pixels0 = NULL;
 static uint32_t *pixels1 = NULL;
 static int buf_size = 0;
+
+// Polar framebuffer of finished per-column APA102 words. The projection
+// (project_angle over the whole frame) runs off the per-column critical path
+// on the render task; the serve task only copies the current column's two arms
+// out of the published front buffer and clocks the SPI, so its cost is
+// constant regardless of the emulated scene. Double-buffered in internal SRAM
+// (uncached, hence coherent across cores); falls back to a single shared
+// buffer if the internal heap can't spare the second one (POV tolerates the
+// rare per-column tear that then becomes possible).
+static uint32_t *fb_a = NULL;
+static uint32_t *fb_b = NULL;
+static uint32_t *volatile fb_front = NULL;
+static uint32_t *volatile fb_back = NULL;
 static int screen_width = 0;
 static int screen_height = 0;
 static int last_column = 0;
-// fade_generation captured when draw_buf0/1 were rendered into spi_buf, kept
-// until that transfer is confirmed complete -- see gpu_step().
-static uint32_t pending_fade_generation = 0;
 
 // The exit transition runs on the game task while the LED task keeps scanning
 // the last copied surface on core 1.  The atomic flag rejects any later
@@ -70,8 +75,8 @@ static uint32_t vs_exit_fade_generation = 0;
 static uint32_t vs_exit_presented_generation = 0;
 
 // True while framebuffers are being (re)allocated or the projection table is being rebuilt.
-// gpu_step() skips rendering while this is set. Initially true so the display task waits
-// for the first rg_vs_pov_submit_surface() call before touching vs_data.
+// The render and serve tasks skip work while this is set. Initially true so they wait for
+// the first rg_vs_pov_submit_surface() call before touching vs_data.
 static volatile bool rebuilding = true;
 
 static volatile int64_t last_turn = 0;
@@ -235,7 +240,10 @@ static void spi_start_buses(void) {
     // The configured CS frames each LED burst for the hardware workbench SPI
     // slave. APA102 strips ignore it, so -1 is also valid for a board without CS.
     const spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = SPI_MASTER_FREQ_20M,
+        // Honor the NVS-provisioned LED clock (defaults to 30 MHz on current
+        // boards) rather than a hardcoded rate; a shorter transfer is what
+        // gives the decoupled serve enough per-column headroom.
+        .clock_speed_hz = vs_board.led_freq > 0 ? vs_board.led_freq : SPI_MASTER_FREQ_20M,
         .mode = 0,
         .spics_io_num = vs_board.led_cs,
         .queue_size = 2,
@@ -247,12 +255,8 @@ static void spi_start_buses(void) {
 static void vsspi_init(void) {
     buf_size = 4 + RG_VS_PIXELS * 4 * 2 + 8;
     spi_buf = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
-    draw_buf0 = heap_caps_malloc(buf_size / 2, MALLOC_CAP_DEFAULT);
-    draw_buf1 = heap_caps_malloc(buf_size / 2, MALLOC_CAP_DEFAULT);
-    RG_ASSERT(spi_buf && draw_buf0 && draw_buf1, "ventilastation SPI buffers alloc failed");
+    RG_ASSERT(spi_buf, "ventilastation SPI buffer alloc failed");
     memset(spi_buf, 0xff, buf_size);
-    memset(draw_buf0, 0x01, buf_size / 2);
-    memset(draw_buf1, 0x01, buf_size / 2);
     ((uint32_t *)spi_buf)[0] = 0;
     pixels0 = (uint32_t *)(spi_buf + 4);
     pixels1 = (uint32_t *)(spi_buf + RG_VS_PIXELS * 4);
@@ -260,6 +264,22 @@ static void vsspi_init(void) {
         pixels0[n] = 0x010000ff;
         pixels1[n] = 0x000100ff;
     }
+
+    // Framebuffers must be internal (uncached) so the render task's writes on
+    // core 1 are seen by the serve without cache maintenance.
+    size_t fb_bytes = (size_t)RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint32_t);
+    fb_a = heap_caps_malloc(fb_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_32BIT);
+    fb_b = heap_caps_malloc(fb_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_32BIT);
+    RG_ASSERT(fb_a, "ventilastation framebuffer alloc failed");
+    if (!fb_b) {
+        fb_b = fb_a; // single-buffer fallback (tear-tolerant)
+    }
+    for (size_t i = 0; i < (size_t)RG_VS_COLUMNS * RG_VS_PIXELS; i++) {
+        fb_a[i] = RG_VS_APA102_BLACK;
+        fb_b[i] = RG_VS_APA102_BLACK;
+    }
+    fb_front = fb_a;
+    fb_back = fb_b;
 }
 
 // Queues data_in for DMA transmission and returns immediately, so the caller
@@ -304,9 +324,11 @@ static void hall_init(void) {
     RG_ASSERT(ret == ESP_OK, "gpio_isr_handler_add failed.");
 }
 
-static void gpu_step(void) {
-    if (rebuilding)
-        return;
+// Serve the column currently under the LEDs, if the fan has advanced to a new
+// one: copy that column's two arms out of the published framebuffer and start
+// the DMA. Constant, cheap cost -- no projection here -- so it always meets the
+// per-column deadline regardless of scene complexity.
+static void gpu_serve(void) {
     int64_t now = rg_system_timer();
     uint32_t column = ((now - last_turn) * RG_VS_COLUMNS / last_turn_duration) % RG_VS_COLUMNS;
     if (column != last_column) {
@@ -315,45 +337,54 @@ static void gpu_step(void) {
         uint32_t column_deadline_us = last_turn_duration > 0
             ? (uint32_t)(last_turn_duration / RG_VS_COLUMNS) : 0;
 
-        // Queue transmission of spi_buf's current contents -- the previous
-        // iteration's rendered columns -- then render this column into the
-        // separate draw buffers below while that transfer is in flight.
-        // Mirrors the MicroPython GPU task's overlapped SPI+render pattern
-        // (hardware/rotor/modules/povdisplay/gpu.c).
-        vsspi_write_queue(spi_buf, buf_size);
-        uint32_t transmitting_generation = pending_fade_generation;
-
-        int64_t project_start = measuring ? rg_system_timer() : 0;
-        project_angle((column + RG_VS_COLUMNS / 2) % RG_VS_COLUMNS, draw_buf0);
-        int64_t arm0_end = measuring ? rg_system_timer() : 0;
-        project_angle(column, draw_buf1);
-        int64_t project_end = measuring ? rg_system_timer() : 0;
-
-        pending_fade_generation = __atomic_load_n(
-            &vs_exit_fade_generation, __ATOMIC_ACQUIRE);
-
-        // Wait for the transfer kicked off above to finish before
-        // overwriting spi_buf -- the DMA engine reads directly from it.
+        // The previous DMA overlapped the projection work below (it was queued
+        // last iteration and ran while we projected a column), so this wait is
+        // normally already satisfied.
         vsspi_wait_complete();
-        int64_t spi_end = measuring ? rg_system_timer() : 0;
+        int64_t wait_end = measuring ? rg_system_timer() : 0;
 
+        uint32_t *fb = __atomic_load_n(&fb_front, __ATOMIC_ACQUIRE);
+        uint32_t *arm0 = fb + (size_t)((column + RG_VS_COLUMNS / 2) % RG_VS_COLUMNS) * RG_VS_PIXELS;
+        uint32_t *arm1 = fb + (size_t)column * RG_VS_PIXELS;
         for (int n = 0; n < RG_VS_PIXELS; n++) {
-            pixels0[n] = draw_buf0[RG_VS_PIXELS - 1 - n];
-            pixels1[n] = draw_buf1[n];
+            pixels0[n] = arm0[RG_VS_PIXELS - 1 - n];
+            pixels1[n] = arm1[n];
         }
-        __atomic_store_n(&vs_exit_presented_generation,
-                         transmitting_generation,
-                         __ATOMIC_RELEASE);
+        vsspi_write_queue(spi_buf, buf_size);
+        int64_t queue_end = measuring ? rg_system_timer() : 0;
         last_column = column;
 
         if (measuring) {
             vs_performance_record(column, column_deadline_us,
-                vs_elapsed_us(measurement_start, spi_end),
-                vs_elapsed_us(project_start, project_end),
-                vs_elapsed_us(project_start, arm0_end),
-                vs_elapsed_us(arm0_end, project_end),
-                vs_elapsed_us(project_end, spi_end));
+                vs_elapsed_us(measurement_start, queue_end),  // total
+                0, 0, 0,                                       // projection off-path
+                vs_elapsed_us(measurement_start, wait_end));   // spi wait
         }
+    }
+}
+
+// Project one framebuffer column per call, publishing a fresh frame every time
+// the whole ring has been covered. Interleaved with gpu_serve() on the same
+// task: because each projected column (~one SPI transfer's worth of work)
+// overlaps the DMA of the column just served, projection is off the serve's
+// critical path -- a served column always reads an already-projected fb entry,
+// and the projection only ever delays the next serve by well under a column
+// period. This keeps the panel refreshing at ~30 fps with zero skips while the
+// serve stays constant-cost.
+static int render_col = 0;
+static void project_next_column(void) {
+    project_angle(render_col, fb_back + (size_t)render_col * RG_VS_PIXELS);
+    if (++render_col >= RG_VS_COLUMNS) {
+        render_col = 0;
+        uint32_t generation = __atomic_load_n(&vs_exit_fade_generation, __ATOMIC_ACQUIRE);
+        uint32_t *published = fb_back;
+        __atomic_store_n(&fb_front, published, __ATOMIC_RELEASE);
+        if (fb_a != fb_b)
+            fb_back = (published == fb_a) ? fb_b : fb_a;
+        // A frame projected at this generation is now published and will be
+        // served within a rotation -- what rg_vs_pov_fade_last_frame_to_black()
+        // waits on.
+        __atomic_store_n(&vs_exit_presented_generation, generation, __ATOMIC_RELEASE);
     }
 }
 
@@ -363,7 +394,12 @@ static void IRAM_ATTR vs_display_task(void *arg) {
     spi_start_buses();
     ESP_ERROR_CHECK(spi_device_acquire_bus(spi_handle, portMAX_DELAY));
     while (true) {
-        gpu_step();
+        if (rebuilding) {
+            rg_task_delay(2); // no surface/framebuffer yet
+            continue;
+        }
+        gpu_serve();
+        project_next_column();
     }
 }
 
@@ -395,10 +431,14 @@ void rg_vs_pov_init(void) {
     memset(vs_projection_table, 0, RG_VS_COLUMNS * RG_VS_PIXELS * sizeof(uint16_t));
 
     // vs_data / vs_data_rgb allocated lazily in rg_vs_pov_submit_surface().
-    // rebuilding stays true until then so gpu_step() doesn't touch NULL pointers.
+    // rebuilding stays true until then so the projection doesn't touch NULL
+    // pointers.
 
     vsspi_init();
-    rg_task_create("vs_display", &vs_display_task, NULL, 2 * 1024, RG_TASK_PRIORITY_6, 1);
+    // One task on core 1 both serves columns and projects the framebuffer,
+    // interleaved (see vs_display_task); core 0 stays entirely with the
+    // emulator.
+    rg_task_create("vs_display", &vs_display_task, NULL, 3 * 1024, RG_TASK_PRIORITY_6, 1);
 }
 
 void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count)
