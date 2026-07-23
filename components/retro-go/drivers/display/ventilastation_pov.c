@@ -43,14 +43,23 @@ static int       vs_format   = 0;
 static uint32_t *vs_palette = NULL;
 static uint16_t *vs_projection_table = NULL;
 static spi_device_handle_t spi_handle;
+static spi_transaction_t vs_spi_trans;
+static bool vs_spi_ongoing = false;
 static char *spi_buf = NULL;
-static uint32_t *extra_buf = NULL;
+// Render targets for the two projection arms, kept separate from spi_buf
+// (the DMA source) so gpu_step() can render the current column while a
+// previous column is still transmitting -- see vsspi_write_queue().
+static uint32_t *draw_buf0 = NULL;
+static uint32_t *draw_buf1 = NULL;
 static uint32_t *pixels0 = NULL;
 static uint32_t *pixels1 = NULL;
 static int buf_size = 0;
 static int screen_width = 0;
 static int screen_height = 0;
 static int last_column = 0;
+// fade_generation captured when draw_buf0/1 were rendered into spi_buf, kept
+// until that transfer is confirmed complete -- see gpu_step().
+static uint32_t pending_fade_generation = 0;
 
 // The exit transition runs on the game task while the LED task keeps scanning
 // the last copied surface on core 1.  The atomic flag rejects any later
@@ -67,6 +76,78 @@ static volatile bool rebuilding = true;
 
 static volatile int64_t last_turn = 0;
 static volatile int64_t last_turn_duration = 102400;
+
+// This profiler is deliberately opt-in, mirroring the MicroPython GPU task
+// profiler (hardware/rotor/modules/povdisplay/povdisplay.c) so the same
+// "povperf" wire commands (docs/internals/input-protocol-v2.md) work here.
+typedef struct {
+    uint32_t samples;
+    uint32_t skipped_updates;
+    uint32_t deadline_misses;
+    uint32_t deadline_us;
+    uint64_t total_us;
+    uint64_t project_us;
+    uint64_t spi_us;
+    uint32_t max_total_us;
+    uint32_t max_project_us;
+    uint32_t max_arm_project_us;
+    uint32_t max_spi_us;
+    int32_t worst_slack_us;
+    bool have_column;
+    uint8_t last_perf_column;
+} vs_pov_performance_t;
+
+static portMUX_TYPE vs_performance_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool vs_performance_enabled = false;
+static vs_pov_performance_t vs_performance;
+
+static uint32_t vs_elapsed_us(int64_t start, int64_t end) {
+    return end <= start ? 0 : (uint32_t)(end - start);
+}
+
+static bool vs_performance_is_enabled(void) {
+    return __atomic_load_n(&vs_performance_enabled, __ATOMIC_ACQUIRE);
+}
+
+static void vs_performance_reset(void) {
+    portENTER_CRITICAL(&vs_performance_lock);
+    memset(&vs_performance, 0, sizeof(vs_performance));
+    vs_performance.worst_slack_us = INT32_MAX;
+    portEXIT_CRITICAL(&vs_performance_lock);
+}
+
+static void vs_performance_record(uint8_t column, uint32_t deadline_us,
+        uint32_t total_us, uint32_t project_us, uint32_t arm0_us,
+        uint32_t arm1_us, uint32_t spi_us) {
+    if (!vs_performance_is_enabled()) {
+        return;
+    }
+    int32_t slack_us = deadline_us > (uint32_t)INT32_MAX
+        ? INT32_MAX : (int32_t)deadline_us - (int32_t)total_us;
+    portENTER_CRITICAL(&vs_performance_lock);
+    if (vs_performance.have_column) {
+        uint8_t delta = (column - vs_performance.last_perf_column) & 0xff;
+        if (delta > 1) {
+            vs_performance.skipped_updates += delta - 1;
+        }
+    } else {
+        vs_performance.have_column = true;
+    }
+    vs_performance.last_perf_column = column;
+    vs_performance.samples++;
+    vs_performance.deadline_us = deadline_us;
+    vs_performance.total_us += total_us;
+    vs_performance.project_us += project_us;
+    vs_performance.spi_us += spi_us;
+    if (total_us > vs_performance.max_total_us) vs_performance.max_total_us = total_us;
+    if (project_us > vs_performance.max_project_us) vs_performance.max_project_us = project_us;
+    if (arm0_us > vs_performance.max_arm_project_us) vs_performance.max_arm_project_us = arm0_us;
+    if (arm1_us > vs_performance.max_arm_project_us) vs_performance.max_arm_project_us = arm1_us;
+    if (spi_us > vs_performance.max_spi_us) vs_performance.max_spi_us = spi_us;
+    if (total_us > deadline_us) vs_performance.deadline_misses++;
+    if (slack_us < vs_performance.worst_slack_us) vs_performance.worst_slack_us = slack_us;
+    portEXIT_CRITICAL(&vs_performance_lock);
+}
 
 static void vs_load_color_profile(void) {
     uint8_t profile[COLOR_PIPELINE_PROFILE_BYTES];
@@ -166,10 +247,12 @@ static void spi_start_buses(void) {
 static void vsspi_init(void) {
     buf_size = 4 + RG_VS_PIXELS * 4 * 2 + 8;
     spi_buf = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
-    extra_buf = heap_caps_malloc(buf_size / 2, MALLOC_CAP_DEFAULT);
-    RG_ASSERT(spi_buf && extra_buf, "ventilastation SPI buffers alloc failed");
+    draw_buf0 = heap_caps_malloc(buf_size / 2, MALLOC_CAP_DEFAULT);
+    draw_buf1 = heap_caps_malloc(buf_size / 2, MALLOC_CAP_DEFAULT);
+    RG_ASSERT(spi_buf && draw_buf0 && draw_buf1, "ventilastation SPI buffers alloc failed");
     memset(spi_buf, 0xff, buf_size);
-    memset(extra_buf, 0x01, buf_size / 2);
+    memset(draw_buf0, 0x01, buf_size / 2);
+    memset(draw_buf1, 0x01, buf_size / 2);
     ((uint32_t *)spi_buf)[0] = 0;
     pixels0 = (uint32_t *)(spi_buf + 4);
     pixels1 = (uint32_t *)(spi_buf + RG_VS_PIXELS * 4);
@@ -179,13 +262,28 @@ static void vsspi_init(void) {
     }
 }
 
-static void spi_write(const void *data_in, size_t len) {
-    spi_transaction_t transaction = {
-        .length = len * 8,
-        .tx_buffer = data_in,
-    };
-    esp_err_t ret = spi_device_polling_transmit(spi_handle, &transaction);
+// Queues data_in for DMA transmission and returns immediately, so the caller
+// can render the next column while the transfer is still in flight. Mirrors
+// spiWriteNL() in hardware/rotor/modules/povdisplay/minispi.c. The caller
+// must not touch data_in again until vsspi_wait_complete() returns.
+static void vsspi_write_queue(const void *data_in, size_t len) {
+    vs_spi_trans.length = len * 8;
+    vs_spi_trans.tx_buffer = data_in;
+    vs_spi_trans.flags = SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL;
+    esp_err_t ret = spi_device_queue_trans(spi_handle, &vs_spi_trans, pdMS_TO_TICKS(10));
     ESP_ERROR_CHECK(ret);
+    vs_spi_ongoing = true;
+}
+
+// Blocks until the transfer queued by vsspi_write_queue() has completed.
+static void vsspi_wait_complete(void) {
+    if (!vs_spi_ongoing) {
+        return;
+    }
+    spi_transaction_t *completed_trans = NULL;
+    esp_err_t ret = spi_device_get_trans_result(spi_handle, &completed_trans, pdMS_TO_TICKS(100));
+    ESP_ERROR_CHECK(ret);
+    vs_spi_ongoing = false;
 }
 
 static void IRAM_ATTR hall_neg_sensed(void *arg) {
@@ -212,18 +310,50 @@ static void gpu_step(void) {
     int64_t now = rg_system_timer();
     uint32_t column = ((now - last_turn) * RG_VS_COLUMNS / last_turn_duration) % RG_VS_COLUMNS;
     if (column != last_column) {
-        uint32_t fade_generation = __atomic_load_n(
+        bool measuring = vs_performance_is_enabled();
+        int64_t measurement_start = measuring ? rg_system_timer() : 0;
+        uint32_t column_deadline_us = last_turn_duration > 0
+            ? (uint32_t)(last_turn_duration / RG_VS_COLUMNS) : 0;
+
+        // Queue transmission of spi_buf's current contents -- the previous
+        // iteration's rendered columns -- then render this column into the
+        // separate draw buffers below while that transfer is in flight.
+        // Mirrors the MicroPython GPU task's overlapped SPI+render pattern
+        // (hardware/rotor/modules/povdisplay/gpu.c).
+        vsspi_write_queue(spi_buf, buf_size);
+        uint32_t transmitting_generation = pending_fade_generation;
+
+        int64_t project_start = measuring ? rg_system_timer() : 0;
+        project_angle((column + RG_VS_COLUMNS / 2) % RG_VS_COLUMNS, draw_buf0);
+        int64_t arm0_end = measuring ? rg_system_timer() : 0;
+        project_angle(column, draw_buf1);
+        int64_t project_end = measuring ? rg_system_timer() : 0;
+
+        pending_fade_generation = __atomic_load_n(
             &vs_exit_fade_generation, __ATOMIC_ACQUIRE);
-        project_angle((column + RG_VS_COLUMNS / 2) % RG_VS_COLUMNS, extra_buf);
+
+        // Wait for the transfer kicked off above to finish before
+        // overwriting spi_buf -- the DMA engine reads directly from it.
+        vsspi_wait_complete();
+        int64_t spi_end = measuring ? rg_system_timer() : 0;
+
         for (int n = 0; n < RG_VS_PIXELS; n++) {
-            pixels0[n] = extra_buf[RG_VS_PIXELS - 1 - n];
+            pixels0[n] = draw_buf0[RG_VS_PIXELS - 1 - n];
+            pixels1[n] = draw_buf1[n];
         }
-        project_angle(column, pixels1);
-        spi_write(spi_buf, buf_size);
         __atomic_store_n(&vs_exit_presented_generation,
-                         fade_generation,
+                         transmitting_generation,
                          __ATOMIC_RELEASE);
         last_column = column;
+
+        if (measuring) {
+            vs_performance_record(column, column_deadline_us,
+                vs_elapsed_us(measurement_start, spi_end),
+                vs_elapsed_us(project_start, project_end),
+                vs_elapsed_us(project_start, arm0_end),
+                vs_elapsed_us(arm0_end, project_end),
+                vs_elapsed_us(project_end, spi_end));
+        }
     }
 }
 
@@ -278,6 +408,43 @@ void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count)
     if (count > 256)
         count = 256;
     memcpy(vs_palette, palette, count * sizeof(uint32_t));
+}
+
+void rg_vs_pov_set_performance_profiling(bool enabled)
+{
+    if (enabled) {
+        vs_performance_reset();
+    }
+    __atomic_store_n(&vs_performance_enabled, enabled, __ATOMIC_RELEASE);
+}
+
+void rg_vs_pov_reset_performance_stats(void)
+{
+    vs_performance_reset();
+}
+
+void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out)
+{
+    vs_pov_performance_t snapshot;
+    portENTER_CRITICAL(&vs_performance_lock);
+    snapshot = vs_performance;
+    portEXIT_CRITICAL(&vs_performance_lock);
+
+    uint32_t samples = snapshot.samples;
+    out->enabled = vs_performance_is_enabled();
+    out->calibrated = color_pipeline_is_active();
+    out->samples = samples;
+    out->skipped_updates = snapshot.skipped_updates;
+    out->deadline_misses = snapshot.deadline_misses;
+    out->deadline_us = snapshot.deadline_us;
+    out->avg_total_us = samples ? (uint32_t)(snapshot.total_us / samples) : 0;
+    out->max_total_us = snapshot.max_total_us;
+    out->avg_project_us = samples ? (uint32_t)(snapshot.project_us / samples) : 0;
+    out->max_project_us = snapshot.max_project_us;
+    out->max_arm_project_us = snapshot.max_arm_project_us;
+    out->avg_spi_us = samples ? (uint32_t)(snapshot.spi_us / samples) : 0;
+    out->max_spi_us = snapshot.max_spi_us;
+    out->worst_slack_us = samples ? snapshot.worst_slack_us : 0;
 }
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface)
@@ -429,6 +596,17 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface) {
 
 void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms) {
     (void)duration_ms;
+}
+
+void rg_vs_pov_set_performance_profiling(bool enabled) {
+    (void)enabled;
+}
+
+void rg_vs_pov_reset_performance_stats(void) {
+}
+
+void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out) {
+    *out = (rg_vs_pov_performance_stats_t){ 0 };
 }
 
 #endif

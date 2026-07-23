@@ -11,6 +11,7 @@
 #include <nvs.h>
 #include "color_pipeline.h"
 #include "vs_board_config.h"
+#include "drivers/display/ventilastation_pov.h"
 
 // ---- Input protocol v2 byte-stream parser ----
 // Feeds the UART transport below. Mirrors
@@ -212,6 +213,44 @@ static bool vs_povcal_apply_test(const char *command)
     return color_pipeline_set_test_pattern(pattern, level);
 }
 
+// On-device POV render-timing profiler (see
+// docs/internals/input-protocol-v2.md and ventilastation_pov.h). Reuses the
+// exact same "povperf" wire commands as the MicroPython GPU task profiler so
+// one host-side tool profiles both firmwares.
+static void vs_povperf_send_error(const char *code)
+{
+    char line[48];
+    snprintf(line, sizeof(line), "povperf_error %s", code);
+    vs_host_bridge_send(line, NULL, 0);
+}
+
+static void vs_povperf_send_stats(void)
+{
+    rg_vs_pov_performance_stats_t stats;
+    rg_vs_pov_get_performance_stats(&stats);
+    int complete = stats.samples && !stats.skipped_updates && !stats.deadline_misses;
+
+    // Worst case for the timing line below: 175 literal chars + 11 %lu (10
+    // digits each) + 1 %ld (11 digits incl. sign) + NUL = 297 bytes.
+    char line[320];
+    snprintf(line, sizeof(line),
+        "povperf_state enabled=%d encoder=%s scene=voom complete=%d",
+        stats.enabled ? 1 : 0, stats.calibrated ? "calibrated" : "legacy", complete);
+    vs_host_bridge_send(line, NULL, 0);
+
+    snprintf(line, sizeof(line),
+        "povperf_timing samples=%lu deadline_us=%lu skipped=%lu overruns=%lu "
+        "avg_total_us=%lu max_total_us=%lu avg_project_us=%lu max_project_us=%lu "
+        "max_arm_project_us=%lu avg_spi_us=%lu max_spi_us=%lu worst_slack_us=%ld",
+        (unsigned long)stats.samples, (unsigned long)stats.deadline_us,
+        (unsigned long)stats.skipped_updates, (unsigned long)stats.deadline_misses,
+        (unsigned long)stats.avg_total_us, (unsigned long)stats.max_total_us,
+        (unsigned long)stats.avg_project_us, (unsigned long)stats.max_project_us,
+        (unsigned long)stats.max_arm_project_us, (unsigned long)stats.avg_spi_us,
+        (unsigned long)stats.max_spi_us, (long)stats.worst_slack_us);
+    vs_host_bridge_send(line, NULL, 0);
+}
+
 // Shared by the "reset"/"exit" text commands and RESYNC (see
 // docs/internals/input-protocol-v2.md#resync--device-identification):
 // freeze+fade the current frame so every shared retro-core/fMSX/prboom game
@@ -274,6 +313,40 @@ static void vs_handle_command(const char *cmd)
         return;
     }
 
+    if (strcmp(cmd, "povperf status") == 0) {
+        vs_povperf_send_stats();
+        return;
+    }
+
+    if (strcmp(cmd, "povperf start") == 0) {
+        rg_vs_pov_reset_performance_stats();
+        rg_vs_pov_set_performance_profiling(true);
+        vs_povperf_send_stats();
+        return;
+    }
+
+    if (strcmp(cmd, "povperf stop") == 0) {
+        rg_vs_pov_set_performance_profiling(false);
+        vs_povperf_send_stats();
+        return;
+    }
+
+    if (strcmp(cmd, "povperf reset") == 0) {
+        rg_vs_pov_reset_performance_stats();
+        vs_povperf_send_stats();
+        return;
+    }
+
+    if (strcmp(cmd, "povperf mode legacy") == 0 || strcmp(cmd, "povperf mode calibrated") == 0) {
+        if (!color_pipeline_set_enabled(strcmp(cmd, "povperf mode calibrated") == 0)) {
+            vs_povperf_send_error("profile_unavailable");
+            return;
+        }
+        rg_vs_pov_reset_performance_stats();
+        vs_povperf_send_stats();
+        return;
+    }
+
     // EXIT is the emulator's Home/Guide action.  Both it and RESET return to
     // MicroPython, but first freeze the current game frame and sweep it black
     // from the outer LEDs to the centre.  Blocking here stops every shared
@@ -298,7 +371,8 @@ static void vs_handle_command(const char *cmd)
     }
 
     // Every other command (eg. wifi_config) is silently ignored -- native
-    // apps only care about joystick state, reset, and OTA.
+    // apps only care about joystick state, reset, OTA, and the povcal/povperf
+    // calibration and profiling commands handled above.
 }
 
 static void vs_feed_bytes(const uint8_t *data, int n)

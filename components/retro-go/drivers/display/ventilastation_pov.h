@@ -39,6 +39,39 @@ void rg_vs_pov_fade_last_frame_to_black(uint32_t duration_ms);
 // reads the palette from the surface automatically.
 void rg_vs_pov_set_palette32(const uint32_t *palette, size_t count);
 
+// Opt-in on-device render-timing profiler for the POV display task, driven by
+// the same "povperf" wire commands as the MicroPython GPU task profiler (see
+// hardware/rotor/modules/povdisplay/povdisplay.c and
+// docs/internals/input-protocol-v2.md) so both firmwares are profiled the
+// same way. Per-column timing covers both project_angle() calls (the "arms",
+// one per half-turn) and any leftover wait for the SPI transfer to finish
+// once rendering is done -- the transfer itself overlaps with rendering the
+// next column, so this is normally near zero (see gpu_step() in
+// ventilastation_pov.c). skipped_updates counts columns whose angle advanced
+// by more than one step between GPU task iterations, i.e. visibly dropped
+// columns.
+typedef struct {
+    bool enabled;
+    bool calibrated;
+    uint32_t samples;
+    uint32_t skipped_updates;
+    uint32_t deadline_misses;
+    uint32_t deadline_us;
+    uint32_t avg_total_us;
+    uint32_t max_total_us;
+    uint32_t avg_project_us;
+    uint32_t max_project_us;
+    uint32_t max_arm_project_us;
+    uint32_t avg_spi_us;
+    uint32_t max_spi_us;
+    int32_t worst_slack_us;
+} rg_vs_pov_performance_stats_t;
+
+// Enabling resets the sample window first, matching the MicroPython side.
+void rg_vs_pov_set_performance_profiling(bool enabled);
+void rg_vs_pov_reset_performance_stats(void);
+void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out);
+
 
 // Register WiFi display bridge callbacks so the POV driver can forward frames
 // and palette to the desktop pyglet emulator. Pass NULLs to disable.
