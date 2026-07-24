@@ -4,13 +4,14 @@
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <esp_littlefs.h>
+#include "AY8910.h"
+#include "emu_audio_bridge.h"
 
 #define AUDIO_SAMPLE_RATE (32000)
 #define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 60 + 1)
 
 static rg_surface_t *updates[2];
 static rg_surface_t *currentUpdate;
-static rg_task_t *audioQueue;
 static rg_app_t *app;
 
 static int JoyState, LastKey, InMenu, InKeyboard;
@@ -276,6 +277,10 @@ int InitMachine(void)
     InitSound(AUDIO_SAMPLE_RATE, 150);
     SetChannels(64, 0xFFFFFFFF);
 
+    // Ventilastation: only the always-present AY8910 PSG is bridged today;
+    // SCC/MSX-MUSIC (cartridge-dependent expansion audio) are not tapped.
+    emu_audio_begin("msx", NULL);
+
     RPLInit(SaveState, LoadState, MAX_STASIZE);
     RPLRecord(RPL_RESET);
     return 1;
@@ -310,6 +315,16 @@ void PutImage(void)
 
 unsigned int Joystick(void)
 {
+    // Ventilastation: Joystick() is called once per video frame (from
+    // LoopZ80() at ScanLine==192), making it a convenient boundary for the
+    // audio bridge even though it isn't scanline 0 -- the wire protocol
+    // doesn't require exact video-frame alignment, just a regular chunk
+    // boundary. Close out the frame that just finished before starting the
+    // next one's register-write log.
+    emu_audio_frame_end((uint16_t)Ay8910EmuAudioFrameSamples());
+    emu_audio_frame_begin();
+    Ay8910EmuAudioFrameReset();
+
     ProcessEvents(0);
     return JoyState;
 }
@@ -392,10 +407,13 @@ unsigned int GetFreeAudio(void)
 
 void PlayAllSound(int uSec)
 {
-    int64_t start = rg_system_timer();
-    unsigned int samples = 2 * uSec * AUDIO_SAMPLE_RATE / 1000000;
-    rg_task_send(audioQueue, &(rg_task_msg_t){.dataInt = samples});
-    FrameStartTime += rg_system_timer() - start;
+    // No-op: the only consumer of this hook was the legacy software
+    // wavetable "Drum"/click channel, rendered to a 'Dummy' audio sink that
+    // discards the output (this board has no speaker/DAC) -- pure wasted
+    // synthesis work. Real audio (the AY8910/PSG chip) already bypasses
+    // this path entirely: Write8910() forwards register writes straight to
+    // emu_audio_write() synchronously, on the Z80 interpreter's own thread.
+    (void)uSec;
 }
 
 unsigned int WriteAudio(sample *Data, unsigned int Length)
@@ -455,17 +473,6 @@ static rg_gui_event_t input_select_cb(rg_gui_option_t *option, rg_gui_event_t ev
     }
     strcpy(option->value, KeyboardEmulation ? _("Keyboard") : _("Joystick"));
     return RG_DIALOG_VOID;
-}
-
-static void audioTask(void *arg)
-{
-    RG_LOGI("task started");
-    rg_task_msg_t msg;
-    while (rg_task_peek(&msg))
-    {
-        RenderAndPlayAudio(msg.dataInt);
-        rg_task_receive(&msg);
-    }
 }
 
 static void options_handler(rg_gui_option_t *dest)
@@ -539,8 +546,6 @@ void app_main(void)
         argv[argc++] = "-diska";
     }
     argv[argc++] = app->romPath;
-
-    audioQueue = rg_task_create("audioTask", &audioTask, NULL, 4096, RG_TASK_PRIORITY_2, 1);
 
     RG_LOGI("fMSX start");
     fmsx_main(argc, (char **)argv);

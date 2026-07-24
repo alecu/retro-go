@@ -15,6 +15,32 @@
 #include "AY8910.h"
 #include "Sound.h"
 #include <string.h>
+#include "emu_audio_bridge.h"
+
+// Ventilastation: elapsed samples within the current emu-audio frame, for
+// the register-write tap in Write8910() below. Loop8910() is called every
+// 8 scanlines with the elapsed microseconds (see MSX.c), the same
+// granularity the device's own audio synthesis (Sync8910 -> RenderAudio)
+// runs at -- so this matches the device's own fidelity rather than
+// approximating it away. Must match main.c's AUDIO_SAMPLE_RATE.
+#define EMU_AUDIO_MSX_SAMPLE_RATE 32000
+static uint32_t emuAudioFrameSamples = 0;
+
+void Ay8910EmuAudioFrameReset(void)
+{
+  emuAudioFrameSamples = 0;
+}
+
+unsigned int Ay8910EmuAudioFrameSamples(void)
+{
+  return emuAudioFrameSamples;
+}
+
+static uint16_t Ay8910EmuAudioSampleIdx(void)
+{
+  uint32_t idx = emuAudioFrameSamples;
+  return idx > 0xFFFF ? 0xFFFF : (uint16_t)idx;
+}
 
 static const unsigned char Envelopes[16][32] =
 {
@@ -115,6 +141,9 @@ void Write8910(register AY8910 *D,register byte R,register byte V)
 {
   register int J;
 
+  if(R<16)
+    emu_audio_write((uint8_t)(EMU_OP_MSX_AY_BASE+R),V,Ay8910EmuAudioSampleIdx());
+
   switch(R)
   {
     case 1:
@@ -212,6 +241,11 @@ void Write8910(register AY8910 *D,register byte R,register byte V)
 void Loop8910(register AY8910 *D,int uSec)
 {
   register int J;
+
+  /* Ventilastation: advance the emu-audio frame's elapsed-samples counter
+  ** unconditionally (before any of the early returns below), since this is
+  ** the only place that knows how much real time just passed. */
+  emuAudioFrameSamples += (uint32_t)((int64_t)uSec * EMU_AUDIO_MSX_SAMPLE_RATE / 1000000);
 
   /* If envelope period was updated... */
   if(D->EPeriod<0)

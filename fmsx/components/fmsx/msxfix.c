@@ -82,9 +82,13 @@ FILE *msx_fopen(const char *path, const char *mode)
         path = RG_BASE_PATH_CACHE "/MSX_CARTS.SHA";
         if (!rg_storage_exists(path))
         {
+            rg_storage_mkdir(RG_BASE_PATH_CACHE);
             FILE *fp = fopen(path, "wb");
-            fwrite(carts_sha, sizeof(carts_sha), 1, fp);
-            fclose(fp);
+            if (fp)
+            {
+                fwrite(carts_sha, sizeof(carts_sha), 1, fp);
+                fclose(fp);
+            }
         }
     }
     return fopen(get_path(path), mode);

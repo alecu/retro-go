@@ -318,7 +318,7 @@ void app_main(void)
     app->frameskip = 3;
 
     // Ventilastation: announce to the host so it resets its YM2612+SN76489 synth.
-    emu_audio_begin("genesis");
+    emu_audio_begin("genesis", NULL);
 
     // We only stream chip register writes to the host; don't waste CPU
     // synthesizing PCM that the dummy sink would discard.

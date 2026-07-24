@@ -6,7 +6,9 @@
 #include <time.h>
 
 #define RG_BASE_PATH        RG_STORAGE_ROOT "/retro-go"
+#ifndef RG_BASE_PATH_BIOS // targets may override to match their own bios/ layout convention
 #define RG_BASE_PATH_BIOS   RG_BASE_PATH "/bios"
+#endif
 #define RG_BASE_PATH_CACHE  RG_BASE_PATH "/cache"
 #define RG_BASE_PATH_CONFIG RG_BASE_PATH "/config"
 #define RG_BASE_PATH_COVERS RG_STORAGE_ROOT "/romart"

@@ -2,6 +2,8 @@
 
 #include <sys/time.h>
 #include <gnuboy.h>
+#include "sound.h" // gb_sound_frame_reset()
+#include "emu_audio_bridge.h"
 
 static int skipFrames = 0;
 static bool slowFrame = false;
@@ -225,10 +227,13 @@ static void video_callback(void *buffer)
 }
 
 
+static int emu_frame_samples = 0;
+
 static void audio_callback(void *buffer, size_t length)
 {
     int64_t startTime = rg_system_timer();
     rg_audio_submit(buffer, length >> 1);
+    emu_frame_samples += (int)(length >> 1);
     audio_time += rg_system_timer() - startTime;
 }
 
@@ -302,6 +307,11 @@ void gbc_main(void)
     // Hard reset to have a clean slate
     gnuboy_reset(true);
 
+    // Ventilastation: all 4 GB channels are self-contained (the wave channel
+    // reads a RAM table the game writes itself, not cartridge ROM like NES
+    // DMC), so no ROM access is needed host-side.
+    emu_audio_begin("gb", NULL);
+
     // Load saved state or SRAM
     if (app->bootFlags & RG_BOOT_RESUME)
         rg_emu_load_state(app->saveSlot);
@@ -355,7 +365,16 @@ void gbc_main(void)
             currentUpdate = updates[currentUpdate == updates[0]];
             gnuboy_set_framebuffer(currentUpdate->data);
         }
+        // Ventilastation: the sound buffer's own flush cadence doesn't line
+        // up with video frames (it flushes on filling up, not on vblank), so
+        // wrap the whole gnuboy_run() call rather than a narrower span --
+        // emu_frame_samples accumulates across however many audio_callback
+        // flushes actually happen during it (usually 0 or 1).
+        emu_audio_frame_begin();
+        gb_sound_frame_reset();
+        emu_frame_samples = 0;
         gnuboy_run(drawFrame);
+        emu_audio_frame_end((uint16_t)emu_frame_samples);
 
         if (autoSaveSRAM > 0)
         {

@@ -535,6 +535,16 @@ void rg_display_fade_last_frame_to_black(uint32_t duration_ms)
         rg_vs_pov_fade_last_frame_to_black(duration_ms);
 }
 
+bool rg_display_draw_native_dialog(const char *title, const char *const *lines, int line_count, int selected_index)
+{
+    return rg_vs_pov_draw_native_dialog(title, lines, line_count, selected_index);
+}
+
+void rg_display_clear_native_dialog(void)
+{
+    rg_vs_pov_clear_native_dialog();
+}
+
 bool rg_display_sync(bool block)
 {
 #if RG_DISPLAY_HAS_LCD

@@ -36,6 +36,16 @@ static uint8_t vs_joy1 = 0;
 static uint8_t vs_joy2 = 0;
 static uint8_t vs_extra = 0;
 
+// RESYNC / device identification (see
+// docs/internals/input-protocol-v2.md#resync--device-identification in vsdk).
+// Mirrors input_parser.py's _RESYNC_SEQUENCE byte-for-byte, including the
+// "track a match in parallel with normal parsing, don't suppress it" design:
+// only the leading 'R' has its high bit set, so this is always safe to
+// recognize regardless of vs_state.
+static const uint8_t VS_RESYNC_SEQUENCE[] = { '\n', '\n', 0xD2, 'E', 'S', 'Y', 'N', 'C', '\n' };
+#define VS_RESYNC_LEN (sizeof(VS_RESYNC_SEQUENCE) / sizeof(VS_RESYNC_SEQUENCE[0]))
+static int vs_resync_match = 0;
+
 #define VS_POVCAL_NAMESPACE "voom_pov"
 #define VS_POVCAL_KEY "color_v1"
 #define VS_POVCAL_HEADER_BYTES 12
@@ -202,6 +212,17 @@ static bool vs_povcal_apply_test(const char *command)
     return color_pipeline_set_test_pattern(pattern, level);
 }
 
+// Shared by the "reset"/"exit" text commands and RESYNC (see
+// docs/internals/input-protocol-v2.md#resync--device-identification):
+// freeze+fade the current frame so every shared retro-core/fMSX/prboom game
+// stops cleanly before its partition restarts.
+static void vs_reset_and_restart(void)
+{
+    rg_audio_set_mute(true);
+    rg_display_fade_last_frame_to_black(500);
+    rg_system_restart();
+}
+
 static void vs_handle_command(const char *cmd)
 {
     if (strcmp(cmd, "povcal get") == 0) {
@@ -259,9 +280,7 @@ static void vs_handle_command(const char *cmd)
     // retro-core, fMSX, and prboom game before its partition restarts.
     if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "exit") == 0)
     {
-        rg_audio_set_mute(true);
-        rg_display_fade_last_frame_to_black(500);
-        rg_system_restart();
+        vs_reset_and_restart();
         return;
     }
 
@@ -287,6 +306,38 @@ static void vs_feed_bytes(const uint8_t *data, int n)
     for (int i = 0; i < n; ++i)
     {
         uint8_t b = data[i];
+
+        // Track a possible RESYNC match in parallel with normal parsing, not
+        // instead of it -- see input_parser.py's feed() for the full
+        // rationale (0x0A is both the marker's first byte and a legitimate
+        // command terminator/raw joystick payload byte, so a partial or
+        // failed match must not swallow it). Only the byte that completes
+        // the match is consumed here instead of falling through below.
+        if (b == VS_RESYNC_SEQUENCE[vs_resync_match])
+        {
+            vs_resync_match++;
+            if (vs_resync_match == (int)VS_RESYNC_LEN)
+            {
+                // Deliberately not resetting vs_state/vs_cmd_len here: unlike
+                // input_parser.py (which sets a flag its caller acts on
+                // later), vs_reset_and_restart() reboots immediately and
+                // never returns, which already wipes every static in this
+                // file. The explicit reset below and the `return` are just
+                // defensive in case that assumption ever changes.
+                vs_resync_match = 0;
+                vs_reset_and_restart();
+                return;
+            }
+            // Not yet complete: fall through to the switch below, exactly
+            // like input_parser.py -- this byte is still processed normally
+            // (e.g. the marker's leading '\n' terminates whatever command
+            // was in flight, same as a real newline would).
+        }
+        else
+        {
+            vs_resync_match = (b == VS_RESYNC_SEQUENCE[0]) ? 1 : 0;
+        }
+
         switch (vs_state)
         {
         case VS_SCAN:
@@ -352,6 +403,14 @@ uint8_t vs_host_bridge_get_extra(void)
 #define VS_HOST_RX_BUF 256
 #define VS_HOST_TX_RINGBUF 8192
 
+// VS_ROTOR_GIT_HASH is defined by components/retro-go/CMakeLists.txt from
+// ESP-IDF's own PROJECT_VER (git-describe-based; see that file), so this
+// falls back to "unknown" only for a build that doesn't define it.
+#ifndef VS_ROTOR_GIT_HASH
+#define VS_ROTOR_GIT_HASH "unknown"
+#endif
+#define VS_ROTOR_VERSION "v1.0"
+
 static bool bridge_initialized = false;
 static vs_board_config_t board_config;
 
@@ -381,6 +440,15 @@ void vs_host_bridge_init(void)
         ESP_ERROR_CHECK(uart_set_pin(board_config.serial_uart, board_config.serial_tx, board_config.serial_rx,
                                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     }
+
+    // RESYNC identification banner (see
+    // docs/internals/input-protocol-v2.md#resync--device-identification):
+    // the first thing this bridge puts on the wire, since this is the
+    // earliest point any native app touches the host UART. Raw
+    // uart_write_bytes, not a logging macro -- RG_LOGI's own prefix/newline
+    // handling would make the line unrecognizable to a RESYNC prober.
+    static const char banner[] = "VENTILASTATION ROTOR " VS_ROTOR_VERSION " " VS_ROTOR_GIT_HASH "\n";
+    uart_write_bytes(board_config.serial_uart, banner, sizeof(banner) - 1);
 
     RG_LOGI("vs_host: UART%d host link up (tx=%d rx=%d, %d baud)\n",
             (int)board_config.serial_uart, (int)board_config.serial_tx,

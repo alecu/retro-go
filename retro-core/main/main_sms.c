@@ -162,7 +162,7 @@ void sms_main(void)
     // Ventilastation: the SMS, Game Gear, and Coleco paths here all use the
     // smsplus SN76489 core. Tell the host which master clock to use so its
     // serial-side synth matches the board's pitch exactly.
-    emu_audio_begin((sms.display == DISPLAY_NTSC) ? "sms-ntsc" : "sms-pal");
+    emu_audio_begin((sms.display == DISPLAY_NTSC) ? "sms-ntsc" : "sms-pal", NULL);
 
     updates[0]->offset = bitmap.viewport.x;
     updates[0]->width = bitmap.viewport.w;
