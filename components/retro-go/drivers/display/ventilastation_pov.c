@@ -618,6 +618,8 @@ void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out)
     out->avg_spi_us = samples ? (uint32_t)(snapshot.spi_us / samples) : 0;
     out->max_spi_us = snapshot.max_spi_us;
     out->worst_slack_us = samples ? snapshot.worst_slack_us : 0;
+}
+
 // (Re)allocate framebuffers and rebuild the projection table for the given
 // dimensions, if not already done. Shared by rg_vs_pov_submit_surface() and
 // rg_vs_pov_draw_native_dialog(): the latter can be the very first thing
