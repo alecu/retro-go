@@ -861,6 +861,28 @@ rg_rect_t rg_gui_draw_message(const char *format, ...) // const rg_rect_t *rect,
     return rg_gui_draw_dialog(NULL, options, 1, 0);
 }
 
+// On targets with a native (non-pixel) dialog renderer -- eg. Ventilastation,
+// whose POV display has no real LCD for rg_gui_draw_dialog's write_rect calls
+// to land on -- draw a windowed view of the option list through it instead.
+// Returns false (nothing drawn) on targets without one, so the caller falls
+// back to the normal pixel path.
+static bool gui_draw_native_dialog(const char *title, const rg_gui_option_t *options, size_t options_count, int sel)
+{
+    const char *lines[RG_NATIVE_DIALOG_MAX_LINES];
+    int window = (int)RG_MIN(options_count, (size_t)RG_NATIVE_DIALOG_MAX_LINES);
+    int first = sel - window / 2;
+    if (first + window > (int)options_count)
+        first = (int)options_count - window;
+    if (first < 0)
+        first = 0;
+    for (int i = 0; i < window; i++)
+    {
+        const rg_gui_option_t *option = &options[first + i];
+        lines[i] = (option->flags == RG_DIALOG_FLAG_HIDDEN) ? "" : option->label;
+    }
+    return rg_display_draw_native_dialog(title, lines, window, sel - first);
+}
+
 intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, int selected_index)
 {
     rg_gui_option_t *options = (rg_gui_option_t *)options_const;
@@ -908,8 +930,11 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
     int sel = RG_MIN(RG_MAX(0, selected_index), options_count - 1);
     int sel_old = -1;
 
-    rg_gui_draw_status_bars();
-    rg_gui_draw_dialog(title, options, options_count, sel);
+    if (!gui_draw_native_dialog(title, options, options_count, sel))
+    {
+        rg_gui_draw_status_bars();
+        rg_gui_draw_dialog(title, options, options_count, sel);
+    }
     rg_input_wait_for_key(RG_KEY_ALL, false, 1000);
     rg_task_delay(80);
 
@@ -997,7 +1022,8 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
 
         if (redraw)
         {
-            rg_gui_draw_dialog(title, options, options_count, sel);
+            if (!gui_draw_native_dialog(title, options, options_count, sel))
+                rg_gui_draw_dialog(title, options, options_count, sel);
             redraw = false;
         }
 
@@ -1007,6 +1033,7 @@ intptr_t rg_gui_dialog(const char *title, const rg_gui_option_t *options_const, 
 
     rg_input_wait_for_key(joystick, false, 1000);
     rg_display_force_redraw();
+    rg_display_clear_native_dialog();
     // free(shadow_options);
     free(shadow_text_buffer);
 

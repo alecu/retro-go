@@ -17,6 +17,7 @@
 #include "intensidades.h"
 #include "rg_system.h"
 #include "vs_board_config.h"
+#include "tinyfont_data.h"
 
 #define RG_VS_COLUMNS 256
 #define RG_VS_PIXELS 54
@@ -65,6 +66,131 @@ static uint32_t *volatile fb_back = NULL;
 static int screen_width = 0;
 static int screen_height = 0;
 static int last_column = 0;
+
+// --- Native (angle, radius) dialog/menu overlay ---------------------------
+// project_angle()'s normal path nearest-neighbour-samples a 320x240 Cartesian
+// surface down to this disc's 256x54 native resolution, which is fine for
+// game video but far too lossy for text (confirmed illegible on hardware).
+// The overlay below is addressed directly in (angle, radius) space -- one
+// cell per physical LED -- with no resampling, the same way the MicroPython
+// ROM browser (system/launcher) keeps its text legible: sprites positioned
+// directly in polar coordinates instead of projected from a framebuffer.
+//
+// Only a narrow wedge of columns is overridden (matching the ROM browser's
+// ~21-character-wide band "held at the readable bottom of the display"), so
+// the rest of the disc keeps showing whatever game frame is underneath.
+// Hardware-confirmed 2026-07-19: widened to 3/4 of the full rotation (was a
+// ~1/3-width wedge matching the ROM browser's 21-char band).
+#define VS_GUI_WEDGE_HALF_WIDTH 96 // angular columns each side of centre (3/4 of 256)
+// Column considered the bottom of the disc after vs_angle_offset is applied
+// (see RG_VS_ANGLE_OFFSET above). Best guess from the offset math; nudge
+// this if the overlay shows up somewhere other than the bottom on hardware.
+#define VS_GUI_WEDGE_CENTER 0
+#define VS_GUI_CHAR_STEP (TINYFONT_GLYPH_WIDTH + 1) // 1-column gap between glyphs
+#define VS_GUI_ROW_STEP (TINYFONT_GLYPH_HEIGHT + 3) // 3-LED gap between rows
+#define VS_GUI_MAX_CHARS (VS_GUI_WEDGE_HALF_WIDTH * 2 / VS_GUI_CHAR_STEP)
+#define VS_GUI_MAX_ROWS (RG_VS_PIXELS / VS_GUI_ROW_STEP)
+
+enum { VS_GUI_OFF = 0, VS_GUI_WHITE, VS_GUI_YELLOW };
+static const uint32_t vs_gui_palette[] = {
+    [VS_GUI_OFF] = 0,
+    [VS_GUI_WHITE] = 0x00FFFFFF,
+    [VS_GUI_YELLOW] = 0x00FFE000,
+};
+
+static volatile bool vs_gui_overlay_active = false;
+static uint8_t vs_gui_overlay[RG_VS_COLUMNS][RG_VS_PIXELS];
+
+static void vs_ensure_buffers(int width, int height); // defined below, used by rg_vs_pov_draw_native_dialog()
+
+static inline bool vs_gui_column_in_wedge(int column)
+{
+    int rel = (column - VS_GUI_WEDGE_CENTER) % RG_VS_COLUMNS;
+    if (rel < 0)
+        rel += RG_VS_COLUMNS;
+    if (rel > RG_VS_COLUMNS / 2)
+        rel -= RG_VS_COLUMNS;
+    return rel >= -VS_GUI_WEDGE_HALF_WIDTH && rel <= VS_GUI_WEDGE_HALF_WIDTH;
+}
+
+// row_index 0 is the outermost (rim-most) row; higher indices move toward
+// the centre. Hardware-confirmed 2026-07-19: legibility degrades sharply
+// near the centre/axle (rows there read as tiny/unreadable regardless of
+// character count), so row 0 (the title, read first) belongs at the rim
+// where it's most legible, and later/less-critical rows (eg. a trailing
+// "OK") move inward -- confirmed readable even that close to centre because
+// it's short.
+static void vs_gui_draw_glyph(int angle_start, int row_index, int c, uint8_t color)
+{
+    if (c < 0 || c >= TINYFONT_NUM_GLYPHS)
+        c = ' ';
+    int row_base_led = RG_VS_PIXELS - (row_index + 1) * VS_GUI_ROW_STEP;
+    const uint8_t *rows = tinyfont_glyphs[c];
+    for (int ry = 0; ry < TINYFONT_GLYPH_HEIGHT; ry++)
+    {
+        uint8_t bits = rows[ry];
+        if (!bits)
+            continue;
+        // Hardware-confirmed 2026-07-19: the disc shows the naive mapping
+        // rotated 180 degrees, so both axes are mirrored here relative to the
+        // "obvious" (rx, ry) -> (col, led) mapping.
+        int led = row_base_led + ry;
+        if (led < 0 || led >= RG_VS_PIXELS)
+            continue;
+        for (int rx = 0; rx < TINYFONT_GLYPH_WIDTH; rx++)
+        {
+            if (!(bits & (1 << (TINYFONT_GLYPH_WIDTH - 1 - rx))))
+                continue;
+            int col = (angle_start - rx) % RG_VS_COLUMNS;
+            if (col < 0)
+                col += RG_VS_COLUMNS;
+            vs_gui_overlay[col][led] = color;
+        }
+    }
+}
+
+static void vs_gui_draw_line(int row_index, const char *text, uint8_t color)
+{
+    if (!text || !*text || row_index >= VS_GUI_MAX_ROWS)
+        return;
+    int len = (int)strlen(text);
+    if (len > VS_GUI_MAX_CHARS)
+        len = VS_GUI_MAX_CHARS;
+    int angle_start = VS_GUI_WEDGE_CENTER - (len * VS_GUI_CHAR_STEP) / 2;
+    // Character order is reversed too, to match the 180-degree mirroring in
+    // vs_gui_draw_glyph() (otherwise each glyph would be correctly rotated
+    // but the string would read back-to-front).
+    for (int i = 0; i < len; i++)
+        vs_gui_draw_glyph(angle_start + (len - 1 - i) * VS_GUI_CHAR_STEP, row_index, text[i], color);
+}
+
+bool rg_vs_pov_draw_native_dialog(const char *title, const char *const *lines, int line_count, int selected_index)
+{
+    if (!rg_vs_pov_enabled())
+        return false;
+
+    // A dialog can be the very first thing ever drawn (eg. a startup alert,
+    // before any game frame was submitted) -- make sure gpu_step() has
+    // buffers to scan at all, even if they're blank.
+    vs_ensure_buffers(RG_SCREEN_WIDTH, RG_SCREEN_HEIGHT);
+
+    if (line_count > VS_GUI_MAX_ROWS - 1)
+        line_count = VS_GUI_MAX_ROWS - 1; // caller should already have windowed to this
+
+    memset(vs_gui_overlay, VS_GUI_OFF, sizeof(vs_gui_overlay));
+
+    vs_gui_draw_line(0, title, VS_GUI_WHITE);
+    for (int i = 0; i < line_count; i++)
+        vs_gui_draw_line(i + 1, lines[i], i == selected_index ? VS_GUI_YELLOW : VS_GUI_WHITE);
+
+    __atomic_store_n(&vs_gui_overlay_active, true, __ATOMIC_RELEASE);
+    return true;
+}
+
+void rg_vs_pov_clear_native_dialog(void)
+{
+    __atomic_store_n(&vs_gui_overlay_active, false, __ATOMIC_RELEASE);
+}
 
 // The exit transition runs on the game task while the LED task keeps scanning
 // the last copied surface on core 1.  The atomic flag rejects any later
@@ -189,6 +315,8 @@ static void vs_setup_projection_table(void) {
 static void project_angle(int angle, uint32_t row[RG_VS_PIXELS]) {
     uint8_t black_outer_leds = __atomic_load_n(
         &vs_exit_black_outer_leds, __ATOMIC_ACQUIRE);
+    bool overlay_here = __atomic_load_n(&vs_gui_overlay_active, __ATOMIC_ACQUIRE)
+        && vs_gui_column_in_wedge(angle);
     for (int led = 0; led < RG_VS_PIXELS; led++) {
         // LED zero is the centre of the projected frame, so blackening the
         // highest indexes first visibly moves from the outside toward it.
@@ -196,15 +324,20 @@ static void project_angle(int angle, uint32_t row[RG_VS_PIXELS]) {
             row[led] = RG_VS_APA102_BLACK;
             continue;
         }
-        uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
-        int x = ((pos >> 8) & 0xff) - 128 + screen_width / 2;
-        int y = (pos & 0xff) - 128 + screen_height / 2;
 
         uint32_t doom_color;
-        if (vs_format & RG_PIXEL_PALETTE) {
-            doom_color = vs_palette[vs_data[y * screen_width + x]];
+        uint8_t overlay_color = overlay_here ? vs_gui_overlay[angle][led] : VS_GUI_OFF;
+        if (overlay_color != VS_GUI_OFF) {
+            doom_color = vs_gui_palette[overlay_color];
         } else {
-            doom_color = vs_data_rgb[y * screen_width + x];
+            uint16_t pos = vs_projection_table[angle * RG_VS_PIXELS + led];
+            int x = ((pos >> 8) & 0xff) - 128 + screen_width / 2;
+            int y = (pos & 0xff) - 128 + screen_height / 2;
+            if (vs_format & RG_PIXEL_PALETTE) {
+                doom_color = vs_palette[vs_data[y * screen_width + x]];
+            } else {
+                doom_color = vs_data_rgb[y * screen_width + x];
+            }
         }
 
         if (color_pipeline_is_active()) {
@@ -485,6 +618,33 @@ void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out)
     out->avg_spi_us = samples ? (uint32_t)(snapshot.spi_us / samples) : 0;
     out->max_spi_us = snapshot.max_spi_us;
     out->worst_slack_us = samples ? snapshot.worst_slack_us : 0;
+// (Re)allocate framebuffers and rebuild the projection table for the given
+// dimensions, if not already done. Shared by rg_vs_pov_submit_surface() and
+// rg_vs_pov_draw_native_dialog(): the latter can be the very first thing
+// drawn (eg. a "BIOS file missing" alert before any game frame exists), and
+// gpu_step() won't scan anything -- overlay included -- until this has run
+// at least once (see `rebuilding` below).
+static void vs_ensure_buffers(int width, int height)
+{
+    if (screen_width == width && screen_height == height && vs_data && vs_data_rgb)
+        return;
+
+    rebuilding = true;
+    free(vs_data);     vs_data     = NULL;
+    free(vs_data_rgb); vs_data_rgb = NULL;
+
+    screen_width  = width;
+    screen_height = height;
+    size_t n = (size_t)screen_width * screen_height;
+
+    vs_data     = rg_alloc(n,                    MEM_FAST);
+    vs_data_rgb = rg_alloc(n * sizeof(uint32_t), MEM_FAST);
+    RG_ASSERT(vs_data && vs_data_rgb, "ventilastation POV surface alloc failed");
+
+    memset(vs_data,     0, n);
+    memset(vs_data_rgb, 0, n * sizeof(uint32_t));
+    vs_setup_projection_table();
+    rebuilding = false;
 }
 
 void rg_vs_pov_submit_surface(const rg_surface_t *surface)
@@ -493,26 +653,7 @@ void rg_vs_pov_submit_surface(const rg_surface_t *surface)
         return;
     if (!surface || !surface->data)
         return;
-    // (Re)allocate framebuffers and rebuild projection table when dimensions change.
-    if (screen_width != surface->width || screen_height != surface->height)
-    {
-        rebuilding = true;
-        free(vs_data);     vs_data     = NULL;
-        free(vs_data_rgb); vs_data_rgb = NULL;
-
-        screen_width  = surface->width;
-        screen_height = surface->height;
-        size_t n = (size_t)screen_width * screen_height;
-
-        vs_data     = rg_alloc(n,                    MEM_FAST);
-        vs_data_rgb = rg_alloc(n * sizeof(uint32_t), MEM_FAST);
-        RG_ASSERT(vs_data && vs_data_rgb, "ventilastation POV surface alloc failed");
-
-        memset(vs_data,     0, n);
-        memset(vs_data_rgb, 0, n * sizeof(uint32_t));
-        vs_setup_projection_table();
-        rebuilding = false;
-    }
+    vs_ensure_buffers(surface->width, surface->height);
 
     vs_format = surface->format;
 
@@ -647,6 +788,15 @@ void rg_vs_pov_reset_performance_stats(void) {
 
 void rg_vs_pov_get_performance_stats(rg_vs_pov_performance_stats_t *out) {
     *out = (rg_vs_pov_performance_stats_t){ 0 };
+bool rg_vs_pov_draw_native_dialog(const char *title, const char *const *lines, int line_count, int selected_index) {
+    (void)title;
+    (void)lines;
+    (void)line_count;
+    (void)selected_index;
+    return false;
+}
+
+void rg_vs_pov_clear_native_dialog(void) {
 }
 
 #endif

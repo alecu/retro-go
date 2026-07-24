@@ -22,6 +22,7 @@
 */
 
 #include "nes.h"
+#include "emu_audio_bridge.h"
 
 #define APU_VOLUME_DECAY(x)  ((x) -= ((x) >> 7))
 
@@ -427,6 +428,15 @@ static inline int apu_dmc(void)
 void apu_write(uint32 address, uint8 value)
 {
    int chan;
+
+   // Ventilastation: this engine only renders audio once per frame, in a
+   // single apu_process() batch after all of the frame's CPU writes have
+   // landed (apu_fc_advance() below is never called mid-frame) -- so unlike
+   // Genesis/SMS there is no meaningful within-frame timing to preserve;
+   // sample_idx=0 is fine, the host just replays writes in the order sent
+   // and renders one frame's worth of samples from the resulting state,
+   // same as this function's caller does locally.
+   emu_audio_write(EMU_OP_NES_BASE | (address & 0x1f), value, 0);
 
    switch (address)
    {

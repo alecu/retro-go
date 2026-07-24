@@ -10,7 +10,7 @@ rg_setup_compile_options(
     -Wno-stringop-truncation
     -Wno-unused-but-set-variable
     -Wno-unused-variable
-    -DBPS16 -DUNIX -DLSB_FIRST -DNARROW -O2
+    -DBPS16 -DUNIX -DLSB_FIRST -DNARROW -DZLIB -O2
 )
 file(GLOB_RECURSE c_sources "src/*.c")
 set_source_files_properties(${c_sources} PROPERTIES COMPILE_FLAGS "-include msxfix.h")

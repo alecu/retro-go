@@ -113,6 +113,24 @@ void rg_display_submit(const rg_surface_t *update, uint32_t flags);
 // a no-op on non-POV targets.
 void rg_display_fade_last_frame_to_black(uint32_t duration_ms);
 
+// Draws a title plus a short list of option lines using a target-native
+// renderer that bypasses the normal rg_gui pixel/LCD path, for targets where
+// that path is a dead end (eg. Ventilastation, which has no real LCD to
+// write_rect into). The caller is responsible for windowing a long option
+// list down to at most RG_NATIVE_DIALOG_MAX_LINES entries before calling
+// (mirrors how the ROM browser only ever draws its visible rows, never the
+// whole list) -- this keeps the callee allocation-free. selected_index is an
+// index into `lines` (not into the caller's full list), or -1 if none of the
+// visible lines should be highlighted.
+// Returns false (nothing drawn) if no such renderer exists on this target;
+// the caller must then fall back to rg_gui's normal rendering.
+#define RG_NATIVE_DIALOG_MAX_LINES 5
+bool rg_display_draw_native_dialog(const char *title, const char *const *lines, int line_count, int selected_index);
+
+// Turns off a native dialog overlay drawn by rg_display_draw_native_dialog(),
+// restoring the plain view. No-op on targets without a native renderer.
+void rg_display_clear_native_dialog(void);
+
 rg_display_counters_t rg_display_get_counters(void);
 const rg_display_t *rg_display_get_info(void);
 int rg_display_get_width(void);

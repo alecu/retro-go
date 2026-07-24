@@ -570,7 +570,6 @@ static void task_wrapper(void *arg)
 {
     rg_task_t *task = arg;
     task->handle = xTaskGetCurrentTaskHandle();
-    task->queue = xQueueCreate(1, sizeof(rg_task_msg_t));
     (task->func)(task->arg);
     vQueueDelete(task->queue);
     memset(task, 0, sizeof(rg_task_t));
@@ -607,11 +606,23 @@ rg_task_t *rg_task_create(const char *name, void (*taskFunc)(void *arg), void *a
     strncpy(task->name, name, 15);
 
 #if defined(ESP_PLATFORM)
+    // Created here (synchronously, before the task is spawned) rather than
+    // inside task_wrapper: callers can legitimately rg_task_send() to the
+    // rg_task_t this function returns immediately, and task_wrapper running
+    // on the new task is not guaranteed to reach its own queue-creation line
+    // before that happens (observed on hardware: an early PlayAllSound() ->
+    // rg_task_send(audioQueue, ...) hit a still-NULL queue and asserted
+    // inside xQueueGenericSend).
+    task->queue = xQueueCreate(1, sizeof(rg_task_msg_t));
+    RG_ASSERT(task->queue, "Queue creation failed");
+
     TaskHandle_t handle = NULL;
     if (affinity < 0)
         affinity = tskNO_AFFINITY;
     if (xTaskCreatePinnedToCore(task_wrapper, name, stackSize, task, priority, &handle, affinity) == pdPASS)
         return task;
+
+    vQueueDelete(task->queue);
 #elif defined(RG_TARGET_SDL2)
     SDL_Thread *thread = SDL_CreateThread(task_wrapper, name, task);
     SDL_DetachThread(thread);
@@ -987,10 +998,22 @@ void rg_system_vlog(int level, const char *context, const char *format, va_list 
             len = snprintf(buffer, sizeof(buffer), "[%s] ", levels[level]);
     }
 
+    // snprintf/vsnprintf return the length that *would* have been written,
+    // not clamped to the buffer size, so a long context or format argument
+    // (eg. a long file path) can push len past sizeof(buffer). Clamp after
+    // each call: leaving it unclamped made buffer[len++]/buffer[len] below
+    // write out of bounds and corrupt the stack (observed on hardware as a
+    // wild jump/InstrFetchProhibited crash from an otherwise-unrelated log
+    // call).
+    if (len >= sizeof(buffer))
+        len = sizeof(buffer) - 1;
+
     len += vsnprintf(buffer + len, sizeof(buffer) - len, format, va);
+    if (len >= sizeof(buffer))
+        len = sizeof(buffer) - 1;
 
     // Append a newline if needed only when possible
-    if (len > 0 && buffer[len - 1] != '\n')
+    if (len > 0 && buffer[len - 1] != '\n' && len < sizeof(buffer) - 1)
     {
         buffer[len++] = '\n';
         buffer[len] = 0;

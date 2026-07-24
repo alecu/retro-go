@@ -14,7 +14,13 @@
 // synthesizer and the device sends the register writes that drive it.
 //
 // Wire protocol (same "<line>\n" + binary framing as the rest of the link):
-//   achip <system>\n           once at app start: host resets its synth
+//   achip <system> [<nbytes>]\n [+ <nbytes> payload]
+//       once at app start: host resets its synth. The optional payload is
+//       the running ROM's filename (no path), used by cores whose fidelity
+//       needs the actual ROM bytes (e.g. NES DMC sample playback reads
+//       cartridge PRG-ROM) -- the host locates the same file from its own
+//       roms/ tree, which is the source the board's own ROMs were synced
+//       from. Omitted (no <nbytes>) for chips that need no ROM access.
 //   aframe <nbytes> <nsamples>\n + <nbytes> payload : one emulated video frame
 //   astop\n                    at app exit
 //
@@ -32,15 +38,22 @@
 //   NES APU (addr 0x4000..0x401f):        op = EMU_OP_NES_BASE | (addr & 0x1f)
 //   SMS/GG PSG byte:                     op = EMU_OP_SMS_PSG
 //   SMS/GG stereo byte:                  op = EMU_OP_SMS_GGSTEREO
+//   Game Boy APU (addr 0xff10..0xff3f):  op = EMU_OP_GB_BASE | (addr & 0x3f)
+//   MSX AY8910 PSG register (r = 0..15): op = EMU_OP_MSX_AY_BASE + r
 #define EMU_OP_YM2612_BASE 0x00
 #define EMU_OP_SN76489     0x04
 #define EMU_OP_NES_BASE    0x20  // 0x20..0x3f
 #define EMU_OP_SMS_PSG     0x40
 #define EMU_OP_SMS_GGSTEREO 0x41
+#define EMU_OP_GB_BASE     0x50  // 0x50..0x7f
+#define EMU_OP_MSX_AY_BASE 0x80  // 0x80..0x8f
 
 // Announce the running emulator to the host and bring up the UART link.
-// `system` is a short token: "genesis", "nes", "lynx".
-void emu_audio_begin(const char *system);
+// `system` is a short token: "genesis", "sms-ntsc"/"sms-pal",
+// "nes-ntsc"/"nes-pal", "gb", "msx", "lynx". `rom_name` is the ROM's
+// filename (no directory), or NULL/empty if the host synth needs no ROM
+// access.
+void emu_audio_begin(const char *system, const char *rom_name);
 
 // Tear down: tells the host to stop and flush its synth.
 void emu_audio_end(void);

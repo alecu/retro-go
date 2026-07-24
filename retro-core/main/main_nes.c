@@ -1,6 +1,7 @@
 #include "shared.h"
 
 #include <nofrendo.h>
+#include "emu_audio_bridge.h"
 
 static int overscan = true;
 static int autocrop = 0;
@@ -254,6 +255,13 @@ void nes_main(void)
 
     nes->blit_func = blit_screen;
 
+    // Ventilastation: tell the host which region clock to use so its serial-
+    // side APU synth matches the board's frame rate/pitch (mirrors the SMS
+    // NTSC/PAL split above). The ROM's filename lets the host open the same
+    // ROM from its own roms/ tree (the source the board's copy was synced
+    // from) for DMC sample playback, which needs actual PRG-ROM bytes.
+    emu_audio_begin((nes->system == SYS_NES_PAL) ? "nes-pal" : "nes-ntsc", rg_basename(app->romPath));
+
     nsfPlayer = nes->cart->type == ROM_TYPE_NSF;
 
     ppu_setopt(PPU_LIMIT_SPRITES, rg_settings_get_number(NS_APP, SETTING_SPRITELIMIT, 1));
@@ -304,7 +312,9 @@ void nes_main(void)
 
         input_update(0, buttons);
         input_update(1, nes_buttons(joystick2));
+        emu_audio_frame_begin();
         nes_emulate(drawFrame);
+        emu_audio_frame_end((uint16_t)nes->apu->samples_per_frame);
 
         // Tick before submitting audio/syncing
         rg_system_tick(rg_system_timer() - startTime);
